@@ -88,8 +88,10 @@ class CactusService {
   /// Stream chat completion tokens.
   Stream<String> chat(
     List<AppMessage> messages, {
-    int maxTokens = 512,
-    double temperature = 0.7,
+    int maxTokens = 2048,
+    double temperature = 1.0,
+    double topP = 0.95,
+    int topK = 64,
     String? systemPrompt,
   }) async* {
     if (!isReady) {
@@ -115,6 +117,8 @@ class CactusService {
     final optionsJson = jsonEncode({
       'max_tokens': maxTokens,
       'temperature': temperature,
+      'top_p': topP,
+      'top_k': topK,
     });
 
     print('[CactusService] Starting cactusComplete in background isolate...');

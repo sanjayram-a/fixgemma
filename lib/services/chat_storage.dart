@@ -9,11 +9,26 @@ class ChatStorage {
 
   Future<void> init() async {
     _box = await Hive.openBox<ChatSession>(_boxName);
+    // Purge any abandoned empty sessions from previous runs
+    await _purgeEmpty();
   }
 
-  /// Get all sessions sorted by updatedAt desc
+  /// Delete all sessions that have no real user messages.
+  Future<void> _purgeEmpty() async {
+    final toDelete = _box.values
+        .where((s) => !s.messages.any((m) => m.isUser))
+        .map((s) => s.id)
+        .toList();
+    for (final id in toDelete) {
+      await _box.delete(id);
+    }
+  }
+
+  /// Get all sessions that have at least one real exchange, sorted newest first
   List<ChatSession> getAllSessions() {
-    final sessions = _box.values.toList();
+    final sessions = _box.values
+        .where((s) => s.messages.any((m) => m.isUser)) // only real sessions
+        .toList();
     sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return sessions;
   }
@@ -32,8 +47,11 @@ class ChatStorage {
     return session;
   }
 
-  /// Save/update a session
+  /// Save/update a session — only persists if it has real user messages.
   Future<void> saveSession(ChatSession session) async {
+    // Don't save abandoned empty sessions
+    if (!session.messages.any((m) => m.isUser)) return;
+
     session.updatedAt = DateTime.now();
 
     // Auto-title from first user message

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
+import '../models/repair_response.dart';
 import '../services/cactus_service.dart';
 import '../services/chat_storage.dart';
 import '../services/audio_service.dart';
@@ -29,6 +30,31 @@ final ttsServiceProvider = Provider<TtsService>((ref) {
   return svc;
 });
 
+// ── Repair Card State ──────────────────────────────────────────────────────
+/// Represents one "card" shown in the response carousel.
+enum RepairCardType { safety, tools, step, tips, followUp }
+
+class RepairCard {
+  final RepairCardType type;
+  final String title;
+  final String body;
+  final bool isLoading;
+
+  const RepairCard({
+    required this.type,
+    required this.title,
+    required this.body,
+    this.isLoading = false,
+  });
+
+  RepairCard copyWith({String? body, bool? isLoading}) => RepairCard(
+        type: type,
+        title: title,
+        body: body ?? this.body,
+        isLoading: isLoading ?? this.isLoading,
+      );
+}
+
 // ── Chat State ─────────────────────────────────────────────────────────────
 class ChatState {
   final ChatSession? activeSession;
@@ -39,6 +65,10 @@ class ChatState {
   final String? errorMessage;
   final bool isRecording;
 
+  // Structured response data
+  final List<RepairCard> cards;
+  final RepairResponse? lastResponse;
+
   const ChatState({
     this.activeSession,
     this.messages = const [],
@@ -47,6 +77,8 @@ class ChatState {
     this.streamingText,
     this.errorMessage,
     this.isRecording = false,
+    this.cards = const [],
+    this.lastResponse,
   });
 
   ChatState copyWith({
@@ -57,6 +89,8 @@ class ChatState {
     String? streamingText,
     String? errorMessage,
     bool? isRecording,
+    List<RepairCard>? cards,
+    RepairResponse? lastResponse,
   }) =>
       ChatState(
         activeSession: activeSession ?? this.activeSession,
@@ -66,6 +100,8 @@ class ChatState {
         streamingText: streamingText ?? this.streamingText,
         errorMessage: errorMessage ?? this.errorMessage,
         isRecording: isRecording ?? this.isRecording,
+        cards: cards ?? this.cards,
+        lastResponse: lastResponse ?? this.lastResponse,
       );
 }
 
@@ -76,26 +112,40 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final TtsService _tts;
   final String? _activeModelId;
   final bool _ttsEnabled;
+  final AppSettings _settings;
 
   ChatNotifier(this._cactus, this._storage, this._audio, this._tts,
-      this._activeModelId, this._ttsEnabled)
+      this._activeModelId, this._ttsEnabled, this._settings)
       : super(const ChatState());
 
+  // Structured JSON system prompt — optimised for small quantised mobile models
   static const String _systemPrompt =
-      'You are FixGemma, an expert appliance repair and DIY assistant. '
-      'Give clear, step-by-step guidance for diagnosing and fixing household appliances. '
-      'Always prioritize safety — warn about electrical hazards or when to call a professional. '
-      'Keep responses practical and easy to follow for someone with basic DIY skills. '
-      'Use markdown for structure when it helps clarity.'
-      'Always Answer in User Language';
+      'You are fixgemma ,a master technician and home repair expert. You provide clear, step-by-step instructions for fixing devices, appliances, and home items.'
+      'Always respond in the exact same language the user writes in. '
+      'CRITICAL: Output ONLY raw, valid JSON. '
+      'Do not include markdown formatting like ```json or any text before or after the JSON.\n\n'
+      'Use this exact JSON structure:\n'
+      '{\n'
+      '  "safety": "<safety message>",\n'
+      '  "tools": ["<tool 1>", "<tool 2>"],\n'
+      '  "steps": [\n'
+      '    {"number": 1, "title": "<title>", "description": "<description>", "warning": "<warning>"}\n'
+      '  ],\n'
+      '  "tips": ["<tip 1>"]\n'
+      '}\n\n'
+      'Rules:\n'
+      '- If there are no safety hazards, set "safety" to "".\n'
+      '- If no tools are needed, set "tools" to [].\n'
+      '- If there are no extra tips, set "tips" to [].\n'
+      '- If a step has no warning, set "warning" to "".\n'
+      '- NEVER use the value null. Always use "" or [] instead.\n'
+      '- Always include at least one step in the "steps" array.';
 
-  /// Start a new chat session
+  /// Start a new repair session with a prompt
   Future<void> newChat() async {
-    // Stop any active generation first
     if (state.isStreaming) {
       _cactus.stopGeneration();
     }
-
     final modelId = _activeModelId ?? 'fixgemma4-e4b-int4';
     final session = await _storage.createSession(modelId);
     if (!mounted) return;
@@ -106,6 +156,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       isStreaming: false,
       streamingText: null,
       errorMessage: null,
+      cards: [],
+      lastResponse: null,
     );
   }
 
@@ -116,24 +168,29 @@ class ChatNotifier extends StateNotifier<ChatState> {
       activeSession: session,
       messages: List.from(session.messages),
       streamingText: null,
+      cards: [],
     );
   }
 
-  /// Send a text message (optionally with images / audio)
-  Future<void> sendMessage(String text,
-      {List<String>? imagePaths, String? audioPath}) async {
+  /// Send a message and stream structured JSON response.
+  /// If [appendTo] is provided, new cards are appended after those cards
+  /// (used for follow-up questions in the same carousel).
+  Future<void> sendMessage(
+    String text, {
+    List<String>? imagePaths,
+    String? audioPath,
+    List<RepairCard>? appendTo,
+  }) async {
     if (state.isStreaming) return;
 
     final hasImages = imagePaths != null && imagePaths.isNotEmpty;
     final hasAudio = audioPath != null;
     if (text.trim().isEmpty && !hasImages && !hasAudio) return;
 
-    // If user sends only images with no text, provide context
     if (text.trim().isEmpty && hasImages) {
-      text = 'What\'s wrong with this? Please diagnose the issue.';
+      text = "What's wrong with this? Please diagnose the issue.";
     }
 
-    // Ensure we have an active session
     if (state.activeSession == null) await newChat();
     if (!mounted) return;
 
@@ -147,7 +204,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
 
     final updatedMessages = [...state.messages, userMsg];
-    state = state.copyWith(messages: updatedMessages, isStreaming: true, streamingText: '');
+    state = state.copyWith(
+      messages: updatedMessages,
+      isStreaming: true,
+      streamingText: '',
+    );
 
     // Create placeholder assistant message
     final assistantMsg = AppMessage(
@@ -159,40 +220,86 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
     state = state.copyWith(messages: [...updatedMessages, assistantMsg]);
 
-    // Stream response
+    // Stream and parse response
+    final parser = RepairResponseParser();
     final buffer = StringBuffer();
+
     try {
       await for (final token in _cactus.chat(
         updatedMessages,
         systemPrompt: _systemPrompt,
-        maxTokens: 1024,
-        temperature: 0.7,
+        maxTokens: _settings.maxTokens,
+        temperature: _settings.temperature,
+        topP: _settings.topP,
+        topK: _settings.topK,
       )) {
         if (!mounted) return;
         buffer.write(token);
+
+        final response = parser.feed(token);
+        // Pass the raw buffer so _buildCards can extract in-progress step text
+        final freshCards = _buildCards(
+          response,
+          rawBuffer: buffer.toString(),
+          isGenerating: true,
+        );
+        final cards = appendTo != null
+            ? <RepairCard>[...appendTo, ...freshCards]
+            : freshCards;
+
         final newMessages = List<AppMessage>.from(state.messages);
         newMessages.last = assistantMsg.copyWith(
-            content: buffer.toString(), isStreaming: true);
-        state = state.copyWith(messages: newMessages, streamingText: buffer.toString());
+          content: buffer.toString(),
+          isStreaming: true,
+        );
+
+        state = state.copyWith(
+          messages: newMessages,
+          streamingText: buffer.toString(),
+          cards: cards,
+          lastResponse: response,
+        );
       }
     } catch (e) {
-      buffer.write('\n\n*Error: ${e.toString()}*');
+      buffer.write('\n[Error: ${e.toString()}]');
     }
 
     if (!mounted) return;
 
-    // Finalize
+    // Final parse
+    final finalResponse = parser.finalize();
+    final freshFinal = _buildCards(
+      finalResponse,
+      rawBuffer: buffer.toString(),
+      isGenerating: false,
+    );
+    // Append follow-up card only on the first generation (not on follow-ups)
+    final allCards = <RepairCard>[
+      ...(appendTo ?? <RepairCard>[]),
+      ...freshFinal,
+      if (appendTo == null || appendTo.isEmpty)
+        const RepairCard(
+          type: RepairCardType.followUp,
+          title: 'Any Questions?',
+          body: '',
+        ),
+    ];
+
     final finalMessages = List<AppMessage>.from(state.messages);
-    finalMessages.last =
-        assistantMsg.copyWith(content: buffer.toString(), isStreaming: false);
+    finalMessages.last = assistantMsg.copyWith(
+      content: buffer.toString(),
+      isStreaming: false,
+    );
 
     state = state.copyWith(
       messages: finalMessages,
       isStreaming: false,
       streamingText: null,
+      cards: allCards,
+      lastResponse: finalResponse,
     );
 
-    // Save session
+    // Save session immediately after generation
     if (state.activeSession != null) {
       state.activeSession!.messages.clear();
       state.activeSession!.messages.addAll(finalMessages);
@@ -200,12 +307,174 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
 
     // TTS
-    if (mounted && _ttsEnabled && buffer.isNotEmpty) {
-      await _tts.speak(buffer.toString());
+    if (mounted && _ttsEnabled && finalResponse.steps.isNotEmpty) {
+      final text = finalResponse.steps
+          .map((s) => '${s.title}. ${s.description}')
+          .join(' ');
+      await _tts.speak(text);
     }
   }
 
-  /// Record voice, transcribe, then send
+  /// Build the cards list from the current parsed response.
+  /// [rawBuffer] is used to extract the partial body of the step currently
+  /// being streamed (whose closing brace hasn't arrived yet).
+  List<RepairCard> _buildCards(
+    RepairResponse response, {
+    required bool isGenerating,
+    String rawBuffer = '',
+  }) {
+    final cards = <RepairCard>[];
+
+    // Safety card
+    if (response.safetyMessage != null &&
+        response.safetyMessage!.trim().isNotEmpty) {
+      cards.add(RepairCard(
+        type: RepairCardType.safety,
+        title: '⚠️ Safety First',
+        body: response.safetyMessage!,
+      ));
+    }
+
+    // Tools card
+    if (response.toolsRequired != null && response.toolsRequired!.isNotEmpty) {
+      cards.add(RepairCard(
+        type: RepairCardType.tools,
+        title: '🔧 Tools Required',
+        body: response.toolsRequired!.map((t) => '• $t').join('\n'),
+      ));
+    }
+
+    // Complete step cards
+    for (final step in response.steps) {
+      cards.add(RepairCard(
+        type: RepairCardType.step,
+        title: 'Step ${step.number}: ${step.title}',
+        body: step.description +
+            (step.warning != null && step.warning!.trim().isNotEmpty
+                ? '\n\n⚠️ ${step.warning}'
+                : ''),
+      ));
+    }
+
+    // If still streaming, try to show the partial step being written right now
+    if (isGenerating && rawBuffer.isNotEmpty) {
+      final partial = _extractPartialStep(rawBuffer, response.steps.length);
+      if (partial != null) {
+        // Replace the loading card with a live-updating step card
+        cards.add(RepairCard(
+          type: RepairCardType.step,
+          title: partial.title.isNotEmpty
+              ? 'Step ${partial.number}: ${partial.title}'
+              : 'Step ${response.steps.length + 1}…',
+          body: partial.description.isNotEmpty
+              ? partial.description
+              : '…',
+          isLoading: partial.description.isEmpty,
+        ));
+      } else if (cards.isNotEmpty) {
+        // Generic loading card after last completed card
+        cards.add(const RepairCard(
+          type: RepairCardType.step,
+          title: '',
+          body: '',
+          isLoading: true,
+        ));
+      }
+    }
+
+    // Tips card
+    if (response.tips != null && response.tips!.isNotEmpty) {
+      cards.add(RepairCard(
+        type: RepairCardType.tips,
+        title: '💡 Tips',
+        body: response.tips!.map((t) => '• $t').join('\n'),
+      ));
+    }
+
+    return cards;
+  }
+
+  /// Extract the step object currently being streamed (not yet complete).
+  /// Returns null if no partial step is found or all steps are already complete.
+  _PartialStep? _extractPartialStep(String raw, int completedSteps) {
+    // Find the steps array
+    final arrMatch = RegExp(r'"steps"\s*:\s*\[').firstMatch(raw);
+    if (arrMatch == null) return null;
+
+    // Skip `completedSteps` complete objects to get to the in-progress one
+    int i = arrMatch.end;
+    int skipped = 0;
+    final len = raw.length;
+
+    while (i < len && skipped < completedSteps) {
+      while (i < len && raw[i] != '{') {
+        if (raw[i] == ']') return null;
+        i++;
+      }
+      if (i >= len) return null;
+      // Walk this complete object
+      int depth = 0;
+      bool inStr = false, esc = false;
+      while (i < len) {
+        final ch = raw[i];
+        if (esc) { esc = false; }
+        else if (ch == '\\' && inStr) { esc = true; }
+        else if (ch == '"') { inStr = !inStr; }
+        else if (!inStr) {
+          if (ch == '{') depth++;
+          if (ch == '}') { depth--; if (depth == 0) { i++; break; } }
+        }
+        i++;
+      }
+      skipped++;
+    }
+
+    // Now i points into the partial (incomplete) step region.
+    // Find the opening '{' of the next step.
+    while (i < len && raw[i] != '{') {
+      if (raw[i] == ']') return null;
+      i++;
+    }
+    if (i >= len) return null;
+
+    final fragment = raw.substring(i); // e.g. {"number":2, "title":"Foo", "description":"Bar...
+
+    int? number;
+    String title = '';
+    String description = '';
+
+    final numM = RegExp(r'"number"\s*:\s*(\d+)').firstMatch(fragment);
+    if (numM != null) number = int.tryParse(numM.group(1)!);
+
+    final titleM = RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(fragment);
+    if (titleM != null) title = titleM.group(1)!.replaceAll(r'\"', '"');
+
+    // For description, grab whatever is after `"description":"` even if cut off
+    final descStart = RegExp(r'"description"\s*:\s*"').firstMatch(fragment);
+    if (descStart != null) {
+      final after = fragment.substring(descStart.end);
+      // Find the closing quote that isn't escaped
+      final sb = StringBuffer();
+      bool esc2 = false;
+      for (final ch in after.runes) {
+        final c = String.fromCharCode(ch);
+        if (esc2) { sb.write(c); esc2 = false; continue; }
+        if (c == '\\') { esc2 = true; continue; }
+        if (c == '"') break; // closing quote
+        sb.write(c);
+      }
+      description = sb.toString();
+    }
+
+    if (number == null && title.isEmpty && description.isEmpty) return null;
+
+    return _PartialStep(
+      number: number ?? (completedSteps + 1),
+      title: title,
+      description: description,
+    );
+  }
+
   Future<void> startVoiceRecording() async {
     final hasPerms = await _audio.hasPermission();
     if (!hasPerms) {
@@ -217,22 +486,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(isRecording: true);
   }
 
-  Future<void> stopVoiceRecording() async {
-    if (!state.isRecording) return;
+  Future<String?> stopVoiceRecording() async {
+    if (!state.isRecording) return null;
     final path = await _audio.stopRecording();
-    if (!mounted) return;
+    if (!mounted) return null;
     state = state.copyWith(isRecording: false);
-
-    if (path == null) return;
-
-    // Gemma 4 E4B supports native audio input via cactusComplete.
-    // Pass the audio file path directly in the message — toCactusJson()
-    // adds "audio": [path] which cactusComplete handles natively.
-    // Do NOT call cactusTranscribe (that's for dedicated STT models).
-    await sendMessage('🎤 Voice message', audioPath: path);
+    return path;
   }
 
   void clearError() => state = state.copyWith(errorMessage: null);
+  void clearCards() => state = state.copyWith(cards: [], lastResponse: null);
+}
+
+// ── Private helper ──────────────────────────────────────────────────────────
+class _PartialStep {
+  final int number;
+  final String title;
+  final String description;
+  const _PartialStep({
+    required this.number,
+    required this.title,
+    required this.description,
+  });
 }
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
@@ -240,13 +515,18 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final storage = ref.watch(chatStorageProvider);
   final audio = ref.watch(audioServiceProvider);
   final tts = ref.watch(ttsServiceProvider);
-  // Use ref.read (not watch) for model/settings to avoid re-creating
-  // the ChatNotifier mid-stream when these providers update.
   final modelState = ref.read(modelProvider);
   final settings = ref.read(settingsProvider);
 
   return ChatNotifier(
-      cactus, storage, audio, tts, modelState.activeModelId, settings.ttsEnabled);
+    cactus,
+    storage,
+    audio,
+    tts,
+    modelState.activeModelId,
+    settings.ttsEnabled,
+    settings,
+  );
 });
 
 // ── Sessions list ──────────────────────────────────────────────────────────

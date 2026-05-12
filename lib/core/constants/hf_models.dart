@@ -56,10 +56,10 @@ const List<HFModelDef> kAvailableModels = [
     repoId: 'sanjayram-a/fixgemma4-e2b-cact-INT4-zip',
     displayName: 'FixGemma Lite',
     description:
-        'Compact 2B model, text-only. Faster downloads, lower RAM usage. '
-        'Great for quick questions and simple troubleshooting.',
+        'Compact 2B model with vision and audio support. Faster downloads, '
+        'lower RAM usage. Great for quick repairs on any device.',
     sizeBytes: 4043595549,
-    capabilities: ['text'],
+    capabilities: ['text', 'vision', 'audio'],
     quantization: 'INT4',
     icon: Icons.bolt_rounded,
   ),

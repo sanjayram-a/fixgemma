@@ -1,27 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
+import 'screens/splash/splash_screen.dart';
 import 'screens/home/home_screen.dart';
-import 'screens/chat/chat_screen.dart';
-import 'screens/history/history_screen.dart';
-import 'screens/settings/settings_screen.dart';
 
-class FixGemmaApp extends StatelessWidget {
+class FixGemmaApp extends ConsumerWidget {
   const FixGemmaApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
       title: 'FixGemma',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.dark,
-      initialRoute: '/',
+      theme: AppTheme.light,
+      initialRoute: '/splash',
       routes: {
-        '/': (_) => const HomeScreen(),
-        '/chat': (_) => const ChatScreen(),
-        '/history': (_) => const HistoryScreen(),
-        '/settings': (_) => const SettingsScreen(),
+        '/splash': (_) => const SplashScreen(),
+        '/home': (_) => const HomeScreen(),
       },
     );
   }

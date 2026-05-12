@@ -1,181 +1,122 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/constants/hf_models.dart';
 import '../../core/theme/app_theme.dart';
-import '../../providers/model_provider.dart';
-import '../../providers/chat_provider.dart';
-import '../chat/chat_screen.dart';
+import '../../core/theme/page_transitions.dart';
+import '../../core/widgets/floating_orbs_background.dart';
+import '../settings/settings_screen.dart';
+import '../history/history_screen.dart';
 import 'widgets/model_card.dart';
+import '../../providers/model_provider.dart';
+import '../../core/constants/hf_models.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final modelState = ref.watch(modelProvider);
-    final hasReadyModel =
-        modelState.models.any((m) => m.isReady || m.isDownloaded);
-    final screenHeight = MediaQuery.sizeOf(context).height;
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
 
-    // Scale card height so it never blows out on small screens
-    final cardHeight = (screenHeight * 0.52).clamp(320.0, 480.0);
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  int _navIndex = 0;
 
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            // ── Top bar ──────────────────────────────────────────────────────
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: AppTheme.amber500.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(Icons.build_circle_rounded,
-                          color: AppTheme.amber400, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('FixGemma',
-                            style: Theme.of(context).textTheme.headlineSmall),
-                        Text('Your repair assistant',
-                            style: Theme.of(context).textTheme.bodySmall),
-                      ],
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.settings_rounded),
-                      onPressed: () =>
-                          Navigator.pushNamed(context, '/settings'),
-                      tooltip: 'Settings',
-                    ),
-                  ],
-                ),
-              ),
+      backgroundColor: AppTheme.bgColor,
+      body: Stack(
+        children: [
+          const FloatingOrbsBackground(),
+          IndexedStack(
+            index: _navIndex,
+            children: [
+              _HomeTab(onNavChanged: _setNav),
+              const HistoryScreen(),
+            ],
+          ),
+          // Bottom nav
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _BottomNav(
+              currentIndex: _navIndex,
+              onTap: _setNav,
             ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            // ── Hero message ─────────────────────────────────────────────────
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+  void _setNav(int i) => setState(() => _navIndex = i);
+}
+
+// ── Home Tab ─────────────────────────────────────────────────────────────────
+
+class _HomeTab extends ConsumerWidget {
+  final ValueChanged<int> onNavChanged;
+  const _HomeTab({required this.onNavChanged});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 18),
+            // ── Top bar: fixgemma (left) | ⚙️ (right) ────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'fixgemma',
+                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        color: AppTheme.primary,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                      ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    slideUpRoute(const SettingsScreen()),
+                  ),
+                  icon: const Icon(Icons.settings_rounded),
+                  color: AppTheme.primary,
+                  iconSize: 26,
+                  tooltip: 'Settings',
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Choose your repair model',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppTheme.onSurfaceSub,
+                  ),
+            ),
+            // ── Model Cards ───────────────────────────────────────────────
+            // Flexible + FractionallySizedBox keeps cards slightly shorter
+            // than the full available height — user-requested size reduction.
+            Flexible(
+              child: FractionallySizedBox(
+                heightFactor: 0.88,
+                alignment: Alignment.topCenter,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      hasReadyModel
-                          ? 'Ready to fix!'
-                          : 'Download to get started',
-                      style: Theme.of(context).textTheme.displaySmall,
+                    // Model 1 — Full size
+                    Expanded(
+                      child: ModelCard(model: kAvailableModels[0]),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      hasReadyModel
-                          ? 'Your AI repair assistant is ready. Start a chat below.'
-                          : 'Choose a model below. The AI runs fully on your phone — no internet needed for chats.',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: AppTheme.slate400,
-                            height: 1.5,
-                          ),
+                    const SizedBox(height: 16),
+                    // Model 2 — Lite
+                    Expanded(
+                      child: ModelCard(model: kAvailableModels[1]),
                     ),
-                  ],
-                ),
-              ),
-            ),
-
-            // ── Section label ─────────────────────────────────────────────────
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
-                child: Text(
-                  'AI Models',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(color: AppTheme.slate400),
-                ),
-              ),
-            ),
-
-            // ── Model cards (horizontal scroll) ──────────────────────────────
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: cardHeight,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.only(left: 24, right: 8),
-                  itemCount: kAvailableModels.length,
-                  itemBuilder: (context, i) {
-                    final def = kAvailableModels[i];
-                    final model = modelState.models.firstWhere(
-                      (m) => m.id == def.id,
-                      orElse: () => throw StateError('Model not found'),
-                    );
-                    final progress = modelState.downloadProgress[def.id];
-                    return ModelCard(def: def, model: model, progress: progress);
-                  },
-                ),
-              ),
-            ),
-
-            // ── Bottom buttons (fill remaining space so they're at the bottom
-            //    when content is short, but scroll naturally when tall) ────────
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (!hasReadyModel) ...[
-                      _InfoBanner(
-                        icon: Icons.info_outline_rounded,
-                        text:
-                            'Download a model first to start chatting. You only need to do this once.',
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    FilledButton.icon(
-                      onPressed: hasReadyModel
-                          ? () async {
-                              await ref.read(chatProvider.notifier).newChat();
-                              if (context.mounted) {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const ChatScreen()),
-                                );
-                              }
-                            }
-                          : null,
-                      icon: const Icon(Icons.chat_rounded, size: 20),
-                      label: const Text('New Chat'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    if (hasReadyModel) ...[
-                      const SizedBox(height: 10),
-                      OutlinedButton.icon(
-                        onPressed: () =>
-                            Navigator.pushNamed(context, '/history'),
-                        icon: const Icon(Icons.history_rounded, size: 20),
-                        label: const Text('Chat History'),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
-                      ),
-                    ],
+                    // Space for bottom nav
+                    const SizedBox(height: 70),
                   ],
                 ),
               ),
@@ -187,35 +128,104 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _InfoBanner extends StatelessWidget {
-  final IconData icon;
-  final String text;
+// ── Bottom Navigation ─────────────────────────────────────────────────────────
 
-  const _InfoBanner({required this.icon, required this.text});
+class _BottomNav extends StatelessWidget {
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  const _BottomNav({required this.currentIndex, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).padding.bottom + 8,
+        top: 8,
+      ),
       decoration: BoxDecoration(
-        color: AppTheme.slate800,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.slate700),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            AppTheme.bgColor.withValues(alpha: 0),
+            AppTheme.bgColor.withValues(alpha: 0.92),
+            AppTheme.bgColor,
+          ],
+        ),
       ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          Icon(icon, color: AppTheme.slate400, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: AppTheme.slate400, height: 1.4),
-            ),
+          _NavItem(
+            icon: Icons.home_rounded,
+            label: 'Home',
+            isActive: currentIndex == 0,
+            onTap: () => onTap(0),
+          ),
+          _NavItem(
+            icon: Icons.history_rounded,
+            label: 'History',
+            isActive: currentIndex == 1,
+            onTap: () => onTap(1),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isActive ? AppTheme.primary : AppTheme.onSurfaceSub;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isActive
+                      ? AppTheme.primary.withValues(alpha: 0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(height: 2),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: Theme.of(context).textTheme.labelSmall!.copyWith(
+                      color: color,
+                      fontWeight:
+                          isActive ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                child: Text(label),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

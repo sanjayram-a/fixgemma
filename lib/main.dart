@@ -6,10 +6,15 @@ import 'models/chat_message.dart';
 import 'models/chat_session.dart';
 import 'providers/chat_provider.dart';
 import 'services/chat_storage.dart';
+import 'services/download_manager.dart';
 import 'app.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialise the OS-level background downloader (FileDownloader).
+  // Must be called before any download starts and before the widget tree.
+  await DownloadManager.initialise();
 
   // Initialize Hive with manual adapters (no code-gen required)
   await Hive.initFlutter();

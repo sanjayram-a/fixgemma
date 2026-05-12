@@ -1,648 +1,517 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/hf_models.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/page_transitions.dart';
 import '../../../core/utils/storage_utils.dart';
 import '../../../models/ai_model.dart';
 import '../../../models/download_state.dart';
 import '../../../providers/model_provider.dart';
+import '../../prompt/text_prompt_screen.dart';
 
 class ModelCard extends ConsumerWidget {
-  final HFModelDef def;
-  final AIModel model;
-  final DownloadProgress? progress;
+  final HFModelDef model;
 
-  const ModelCard({
-    super.key,
-    required this.def,
-    required this.model,
-    this.progress,
-  });
+  const ModelCard({super.key, required this.model});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isComingSoon = def.isComingSoon;
+    final modelState = ref.watch(modelProvider);
+    final aiModel = modelState.models.firstWhere(
+      (m) => m.id == model.id,
+      orElse: () => AIModel(id: model.id),
+    );
+    final progress = modelState.downloadProgress[model.id];
+    final isReady = aiModel.status == ModelStatus.ready;
 
-    return Container(
-      width: 300,
-      margin: const EdgeInsets.only(right: 16),
-      decoration: BoxDecoration(
-        color: AppTheme.slate800,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _borderColor(model.status),
-          width: 1.5,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header row
-            Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: isComingSoon
-                        ? AppTheme.slate700
-                        : AppTheme.amber500.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(
-                    def.icon,
-                    color: isComingSoon ? AppTheme.slate400 : AppTheme.amber400,
-                    size: 26,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        def.displayName,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleLarge
-                            ?.copyWith(fontSize: 17),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        def.quantization,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: AppTheme.amber400,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (isComingSoon)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppTheme.slate700,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      'Soon',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ),
-              ],
-            ),
-
-            const SizedBox(height: 16),
-
-            // Description
-            Text(
-              def.description,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppTheme.slate400,
-                    height: 1.5,
-                  ),
-              maxLines: 2,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Capability chips
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children:
-                  def.capabilities.map((c) => _CapChip(label: c)).toList(),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Size
-            Row(
-              children: [
-                Icon(Icons.storage_rounded, size: 14, color: AppTheme.slate400),
-                const SizedBox(width: 4),
-                Text(
-                  def.sizeLabel,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-
-            const Spacer(),
-
-            // Action area
-            if (!isComingSoon) _buildActionArea(context, ref),
-            if (isComingSoon)
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: null,
-                  child: const Text('Coming Soon'),
-                ),
+    return GestureDetector(
+      onTap: isReady ? () => _navigateToPrompt(context, ref) : null,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.74),
+                  Colors.white.withValues(alpha: 0.56),
+                ],
               ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Shows a confirmation dialog then deletes the model.
-  Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.slate800,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Icon(Icons.delete_forever_rounded,
-                color: AppTheme.red400, size: 22),
-            const SizedBox(width: 10),
-            const Text('Delete Model?'),
-          ],
-        ),
-        content: Text(
-          'This will permanently remove "${def.displayName}" and all its files '
-          'from your device. You can re-download it later.',
-          style: TextStyle(color: AppTheme.slate400, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTheme.red500,
-              foregroundColor: Colors.white,
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: _borderColor(aiModel.status),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.07),
+                  blurRadius: 18,
+                  offset: const Offset(0, 5),
+                ),
+              ],
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            // LayoutBuilder lets us size content relative to the real height
+            child: LayoutBuilder(builder: (context, constraints) {
+              final compact = constraints.maxHeight < 230;
+              return Padding(
+                padding: EdgeInsets.all(compact ? 14 : 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    // ── Header ──────────────────────────────────
+                    _Header(model: model, aiModel: aiModel, compact: compact),
+
+                    SizedBox(height: compact ? 8 : 10),
+
+                    // ── Description ──────────────────────────────
+                    Text(
+                      model.description,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppTheme.onSurfaceSub,
+                            height: 1.4,
+                          ),
+                      maxLines: compact ? 1 : 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+
+                    SizedBox(height: compact ? 6 : 8),
+
+                    // ── Capabilities ─────────────────────────────
+                    _CapRow(capabilities: model.capabilities),
+
+                    const Spacer(),
+
+                    // ── Action ────────────────────────────────────
+                    _buildAction(context, ref, aiModel, progress, compact),
+                  ],
+                ),
+              );
+            }),
           ),
-        ],
+        ),
       ),
     );
-    if (confirmed == true && context.mounted) {
-      ref.read(modelProvider.notifier).deleteModel(def.id);
-    }
   }
 
-  Widget _buildActionArea(BuildContext context, WidgetRef ref) {
-    switch (model.status) {
+  void _navigateToPrompt(BuildContext context, WidgetRef ref) {
+    Navigator.push(
+      context,
+      slideUpRoute(TextPromptScreen(modelId: model.id)),
+    );
+  }
+
+  Widget _buildAction(BuildContext context, WidgetRef ref, AIModel aiModel,
+      DownloadProgress? progress, bool compact) {
+    switch (aiModel.status) {
       case ModelStatus.notDownloaded:
-        return SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: () =>
-                ref.read(modelProvider.notifier).startDownload(def.id),
-            icon: const Icon(Icons.download_rounded),
-            label: const Text('Download Model'),
-          ),
+        return _PrimaryBtn(
+          icon: Icons.download_rounded,
+          label: 'Download  •  ${model.sizeLabel}',
+          onTap: () => ref.read(modelProvider.notifier).startDownload(model.id),
+          compact: compact,
         );
 
       case ModelStatus.downloading:
-        return _DownloadingWidget(progress: progress);
+        return _ProgressWidget(progress: progress, compact: compact);
 
       case ModelStatus.paused:
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _DownloadingWidget(progress: progress),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () =>
-                    ref.read(modelProvider.notifier).startDownload(def.id),
-                icon: const Icon(Icons.play_arrow_rounded),
-                label: const Text('Resume'),
-              ),
+            _ProgressWidget(progress: progress, compact: compact),
+            SizedBox(height: compact ? 6 : 8),
+            _PrimaryBtn(
+              icon: Icons.play_arrow_rounded,
+              label: 'Resume',
+              onTap: () =>
+                  ref.read(modelProvider.notifier).startDownload(model.id),
+              compact: compact,
             ),
           ],
         );
 
       case ModelStatus.downloaded:
-        return Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              decoration: BoxDecoration(
-                color: AppTheme.green500.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-                border:
-                    Border.all(color: AppTheme.green500.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.check_circle_rounded,
-                      color: AppTheme.green400, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Downloaded',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.green400,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () =>
-                    ref.read(modelProvider.notifier).loadModel(def.id),
-                icon: const Icon(Icons.play_circle_rounded),
-                label: const Text('Load Model'),
-              ),
-            ),
-            const SizedBox(height: 6),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmDelete(context, ref),
-                icon: Icon(Icons.delete_outline_rounded,
-                    color: AppTheme.red400, size: 18),
-                label: Text('Delete Model',
-                    style: TextStyle(color: AppTheme.red400)),
-                style: OutlinedButton.styleFrom(
-                  side:
-                      BorderSide(color: AppTheme.red500.withValues(alpha: 0.4)),
-                ),
-              ),
-            ),
-          ],
+        return _PrimaryBtn(
+          icon: Icons.play_circle_rounded,
+          label: 'Load Model',
+          onTap: () => ref.read(modelProvider.notifier).loadModel(model.id),
+          compact: compact,
         );
 
       case ModelStatus.loading:
-        return SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: null,
-            icon: const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            label: const Text('Loading…'),
-          ),
+        return _PrimaryBtn(
+          icon: null,
+          label: 'Loading model…',
+          onTap: null,
+          loading: true,
+          compact: compact,
         );
 
       case ModelStatus.ready:
-        return Column(
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppTheme.amber500.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border:
-                    Border.all(color: AppTheme.amber400.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.flash_on_rounded,
-                      color: AppTheme.amber400, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Ready to use',
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelLarge
-                        ?.copyWith(color: AppTheme.amber400),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _confirmDelete(context, ref),
-                icon: Icon(Icons.delete_outline_rounded,
-                    color: AppTheme.red400, size: 18),
-                label: Text('Delete Model',
-                    style: TextStyle(color: AppTheme.red400)),
-                style: OutlinedButton.styleFrom(
-                  side:
-                      BorderSide(color: AppTheme.red500.withValues(alpha: 0.4)),
-                ),
-              ),
-            ),
-          ],
+        return _PrimaryBtn(
+          icon: Icons.arrow_forward_rounded,
+          label: 'Start Repair',
+          onTap: () => _navigateToPrompt(context, ref),
+          compact: compact,
         );
 
       case ModelStatus.error:
-        final canRetryLoad = model.localDirPath != null;
         return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppTheme.red500.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.error_outline_rounded,
-                      color: AppTheme.red400, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      model.errorMessage ?? 'Download failed',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(color: AppTheme.red400),
-                      maxLines: 2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  final notifier = ref.read(modelProvider.notifier);
-                  if (canRetryLoad) {
-                    notifier.loadModel(def.id);
-                  } else {
-                    notifier.startDownload(def.id);
-                  }
-                },
-                icon: Icon(canRetryLoad
-                    ? Icons.play_circle_outline_rounded
-                    : Icons.refresh_rounded),
-                label: Text(canRetryLoad ? 'Try Loading Again' : 'Retry'),
-              ),
-            ),
-            if (canRetryLoad) ...[
-              const SizedBox(height: 6),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton.icon(
-                  onPressed: () =>
-                      ref.read(modelProvider.notifier).startDownload(def.id),
-                  icon: const Icon(Icons.download_rounded, size: 18),
-                  label: const Text('Download Again'),
+            if (!compact)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  aiModel.errorMessage ?? 'Error',
+                  style: TextStyle(
+                      color: AppTheme.red400,
+                      fontSize: 11),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-            ],
+            _PrimaryBtn(
+              icon: Icons.refresh_rounded,
+              label: aiModel.localDirPath != null ? 'Retry Load' : 'Retry',
+              onTap: () {
+                final n = ref.read(modelProvider.notifier);
+                if (aiModel.localDirPath != null) {
+                  n.loadModel(model.id);
+                } else {
+                  n.startDownload(model.id);
+                }
+              },
+              compact: compact,
+            ),
           ],
         );
     }
   }
 
-  static Color _borderColor(ModelStatus status) {
-    switch (status) {
-      case ModelStatus.ready:
-        return AppTheme.amber400.withValues(alpha: 0.4);
-      case ModelStatus.downloaded:
-        return AppTheme.green500.withValues(alpha: 0.3);
-      case ModelStatus.downloading:
-        return AppTheme.amber500.withValues(alpha: 0.3);
-      case ModelStatus.error:
-        return AppTheme.red500.withValues(alpha: 0.3);
-      default:
-        return AppTheme.slate700;
-    }
+  Color _borderColor(ModelStatus status) {
+    return switch (status) {
+      ModelStatus.ready => AppTheme.secondary.withValues(alpha: 0.6),
+      ModelStatus.downloaded => AppTheme.green400.withValues(alpha: 0.4),
+      ModelStatus.downloading => AppTheme.tertiary,
+      ModelStatus.error => AppTheme.red400.withValues(alpha: 0.3),
+      _ => AppTheme.frostedBorder,
+    };
   }
 }
 
-// ── Downloading progress widget ────────────────────────────────────────────
-class _DownloadingWidget extends StatelessWidget {
-  final DownloadProgress? progress;
+// ── Header row ───────────────────────────────────────────────────────────────
+class _Header extends StatelessWidget {
+  final HFModelDef model;
+  final AIModel aiModel;
+  final bool compact;
 
-  const _DownloadingWidget({this.progress});
+  const _Header({
+    required this.model,
+    required this.aiModel,
+    required this.compact,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final iconSize = compact ? 40.0 : 48.0;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Icon orb
+        Container(
+          width: iconSize,
+          height: iconSize,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppTheme.secondary, AppTheme.primary],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.primary.withValues(alpha: 0.25),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Icon(model.icon, color: Colors.white,
+              size: compact ? 20 : 24),
+        ),
+        const SizedBox(width: 12),
+        // Name + meta — Flexible prevents right overflow
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                model.displayName,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.onSurface,
+                    ),
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Icon(Icons.storage_rounded,
+                      size: 11, color: AppTheme.onSurfaceSub),
+                  const SizedBox(width: 3),
+                  Text(
+                    model.sizeLabel,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: AppTheme.onSurfaceSub),
+                  ),
+                  const SizedBox(width: 6),
+                  _QuantChip(label: model.quantization),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        _StatusBadge(status: aiModel.status),
+      ],
+    );
+  }
+}
+
+// ── Capability chips row ─────────────────────────────────────────────────────
+class _CapRow extends StatelessWidget {
+  final List<String> capabilities;
+  const _CapRow({required this.capabilities});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 5,
+      runSpacing: 4,
+      children: capabilities.map((c) => _CapChip(label: c)).toList(),
+    );
+  }
+}
+
+// ── Primary action button ─────────────────────────────────────────────────────
+class _PrimaryBtn extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool loading;
+  final bool compact;
+
+  const _PrimaryBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.loading = false,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: compact ? 38 : 44,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor:
+              onTap == null ? AppTheme.tertiary : AppTheme.primary,
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.symmetric(
+              vertical: compact ? 0 : 4, horizontal: 12),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+          elevation: 2,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: loading
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : icon != null
+                ? Icon(icon, size: 18)
+                : const SizedBox.shrink(),
+        label: Text(
+          label,
+          style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: compact ? 12 : 13),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Download progress ─────────────────────────────────────────────────────────
+class _ProgressWidget extends StatelessWidget {
+  final DownloadProgress? progress;
+  final bool compact;
+  const _ProgressWidget({this.progress, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     final p = progress;
     final isExtracting = p?.status == DownloadStatus.extracting;
-
-    if (isExtracting) return _buildExtracting(context, p!);
-    return _buildDownloading(context, p);
-  }
-
-  Widget _buildDownloading(BuildContext context, DownloadProgress? p) {
-    final pct = p?.overallProgress ?? 0.0;
-    final pctLabel = '${(pct * 100).toStringAsFixed(0)}%';
-
-    String sizeLabel = '';
-    if (p != null && p.totalBytes > 0) {
-      final rxGb = p.bytesReceived / (1024 * 1024 * 1024);
-      final totalGb = p.totalBytes / (1024 * 1024 * 1024);
-      sizeLabel =
-          '${rxGb.toStringAsFixed(1)} / ${totalGb.toStringAsFixed(1)} GB';
-    }
+    final pct = isExtracting
+        ? (p?.extractProgress ?? 0.0)
+        : (p?.overallProgress ?? 0.0);
+    final pctStr = '${(pct * 100).toStringAsFixed(0)}%';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Downloading AI model',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: AppTheme.slate400),
+              isExtracting ? 'Extracting…' : 'Downloading…',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AppTheme.onSurfaceSub),
             ),
-            Text(
-              pctLabel,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppTheme.amber400,
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
+            Text(pctStr,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: AppTheme.primary,
+                      fontWeight: FontWeight.w700)),
           ],
         ),
-
-        const SizedBox(height: 10),
-
-        // Animated progress bar
+        const SizedBox(height: 5),
         ClipRRect(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           child: TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: pct),
             duration: const Duration(milliseconds: 400),
             curve: Curves.easeOut,
-            builder: (_, value, __) => LinearProgressIndicator(
-              value: value > 0 ? value : null,
-              minHeight: 8,
-              backgroundColor: AppTheme.slate700,
-              valueColor: const AlwaysStoppedAnimation(AppTheme.amber400),
+            builder: (_, v, __) => LinearProgressIndicator(
+              value: v > 0 ? v : null,
+              minHeight: 6,
+              backgroundColor: AppTheme.tertiary.withValues(alpha: 0.3),
+              valueColor: AlwaysStoppedAnimation(
+                  isExtracting ? AppTheme.green400 : AppTheme.primary),
             ),
           ),
         ),
-
-        const SizedBox(height: 10),
-
-        // Size line
-        if (sizeLabel.isNotEmpty)
+        if (!compact && p != null && p.totalBytes > 0) ...[
+          const SizedBox(height: 4),
           Row(
             children: [
-              const Icon(Icons.storage_rounded,
-                  size: 12, color: AppTheme.slate400),
-              const SizedBox(width: 4),
-              Text(sizeLabel, style: Theme.of(context).textTheme.labelSmall),
+              Text(
+                '${(p.bytesReceived / 1e9).toStringAsFixed(1)} / '
+                '${(p.totalBytes / 1e9).toStringAsFixed(1)} GB',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: AppTheme.onSurfaceSub),
+              ),
+              if (p.speedBps > 0) ...[
+                const Spacer(),
+                Text(
+                  StorageUtils.formatSpeed(p.speedBps),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: AppTheme.onSurfaceSub),
+                ),
+              ],
             ],
           ),
-
-        const SizedBox(height: 4),
-
-        // Speed + ETA line
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            if (p != null && p.speedBps > 0)
-              Row(
-                children: [
-                  const Icon(Icons.speed_rounded,
-                      size: 12, color: AppTheme.slate400),
-                  const SizedBox(width: 4),
-                  Text(
-                    StorageUtils.formatSpeed(p.speedBps),
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
-              )
-            else
-              const SizedBox.shrink(),
-            if (p != null && p.eta != null)
-              Text(
-                '~${StorageUtils.formatEta(p.eta!)} left',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: AppTheme.slate400),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildExtracting(BuildContext context, DownloadProgress p) {
-    final pct = p.extractProgress;
-    final pctLabel = '${(pct * 100).toStringAsFixed(0)}%';
-    final partLabel =
-        p.totalFiles > 1 ? ' (${p.filesCompleted + 1} of ${p.totalFiles})' : '';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Header
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Extracting$partLabel…',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: AppTheme.slate400),
-            ),
-            Text(
-              pctLabel,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppTheme.amber400,
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 10),
-
-        // Extraction bar — green tint to visually differ from download
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: pct),
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-            builder: (_, value, __) => LinearProgressIndicator(
-              value: value > 0 ? value : null,
-              minHeight: 8,
-              backgroundColor: AppTheme.slate700,
-              valueColor: AlwaysStoppedAnimation(AppTheme.green400),
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 8),
-
-        Row(
-          children: [
-            const Icon(Icons.folder_zip_rounded,
-                size: 12, color: AppTheme.slate400),
-            const SizedBox(width: 4),
-            Text(
-              'Installing model files…',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: AppTheme.slate400),
-            ),
-          ],
-        ),
+        ],
       ],
     );
   }
 }
 
-// ── Capability chip ────────────────────────────────────────────────────────
+// ── Chips ─────────────────────────────────────────────────────────────────────
+class _StatusBadge extends StatelessWidget {
+  final ModelStatus status;
+  const _StatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == ModelStatus.notDownloaded ||
+        status == ModelStatus.downloading) return const SizedBox.shrink();
+
+    final (String label, Color color) = switch (status) {
+      ModelStatus.ready => ('● Ready', AppTheme.secondary),
+      ModelStatus.downloaded => ('✓ Done', AppTheme.green400),
+      ModelStatus.loading => ('Loading…', AppTheme.tertiary),
+      ModelStatus.error => ('Error', AppTheme.red400),
+      _ => ('', AppTheme.onSurfaceSub),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+}
+
+class _QuantChip extends StatelessWidget {
+  final String label;
+  const _QuantChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
+      ),
+      child: Text(label,
+          style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.primary)),
+    );
+  }
+}
+
 class _CapChip extends StatelessWidget {
   final String label;
   const _CapChip({required this.label});
 
   @override
   Widget build(BuildContext context) {
-    final IconData icon;
-    final Color color;
-    switch (label) {
-      case 'vision':
-        icon = Icons.remove_red_eye_rounded;
-        color = const Color(0xFF60A5FA);
-      case 'audio':
-        icon = Icons.mic_rounded;
-        color = const Color(0xFFA78BFA);
-      default:
-        icon = Icons.chat_rounded;
-        color = AppTheme.amber400;
-    }
+    final (IconData icon, Color color) = switch (label) {
+      'vision' => (Icons.remove_red_eye_rounded, AppTheme.secondary),
+      'audio' => (Icons.mic_rounded, const Color(0xFF7C5CBF)),
+      _ => (Icons.chat_rounded, AppTheme.primary),
+    };
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 4),
+          Icon(icon, size: 10, color: color),
+          const SizedBox(width: 3),
           Text(
             label[0].toUpperCase() + label.substring(1),
             style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
+                fontSize: 9, fontWeight: FontWeight.w600, color: color),
           ),
         ],
       ),
