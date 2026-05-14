@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../models/chat_message.dart';
@@ -26,6 +28,16 @@ final audioServiceProvider = Provider<AudioService>((ref) {
 final ttsServiceProvider = Provider<TtsService>((ref) {
   final svc = TtsService();
   svc.init();
+
+  final initialSettings = ref.read(settingsProvider);
+  svc.setEnabled(initialSettings.ttsEnabled);
+  unawaited(svc.setSpeechRate(initialSettings.speechRate));
+
+  ref.listen<AppSettings>(settingsProvider, (_, next) {
+    svc.setEnabled(next.ttsEnabled);
+    unawaited(svc.setSpeechRate(next.speechRate));
+  });
+
   ref.onDispose(svc.dispose);
   return svc;
 });
@@ -57,6 +69,8 @@ class RepairCard {
 
 // ── Chat State ─────────────────────────────────────────────────────────────
 class ChatState {
+  static const Object _unset = Object();
+
   final ChatSession? activeSession;
   final List<AppMessage> messages;
   final bool isStreaming;
@@ -82,26 +96,34 @@ class ChatState {
   });
 
   ChatState copyWith({
-    ChatSession? activeSession,
+    Object? activeSession = _unset,
     List<AppMessage>? messages,
     bool? isStreaming,
     bool? isLoadingModel,
-    String? streamingText,
-    String? errorMessage,
+    Object? streamingText = _unset,
+    Object? errorMessage = _unset,
     bool? isRecording,
     List<RepairCard>? cards,
-    RepairResponse? lastResponse,
+    Object? lastResponse = _unset,
   }) =>
       ChatState(
-        activeSession: activeSession ?? this.activeSession,
+        activeSession: identical(activeSession, _unset)
+            ? this.activeSession
+            : activeSession as ChatSession?,
         messages: messages ?? this.messages,
         isStreaming: isStreaming ?? this.isStreaming,
         isLoadingModel: isLoadingModel ?? this.isLoadingModel,
-        streamingText: streamingText ?? this.streamingText,
-        errorMessage: errorMessage ?? this.errorMessage,
+        streamingText: identical(streamingText, _unset)
+            ? this.streamingText
+            : streamingText as String?,
+        errorMessage: identical(errorMessage, _unset)
+            ? this.errorMessage
+            : errorMessage as String?,
         isRecording: isRecording ?? this.isRecording,
         cards: cards ?? this.cards,
-        lastResponse: lastResponse ?? this.lastResponse,
+        lastResponse: identical(lastResponse, _unset)
+            ? this.lastResponse
+            : lastResponse as RepairResponse?,
       );
 }
 
@@ -111,12 +133,46 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final AudioService _audio;
   final TtsService _tts;
   final String? _activeModelId;
-  final bool _ttsEnabled;
   final AppSettings _settings;
+  int _ttsPlaybackGeneration = 0;
 
   ChatNotifier(this._cactus, this._storage, this._audio, this._tts,
-      this._activeModelId, this._ttsEnabled, this._settings)
+      this._activeModelId, this._settings)
       : super(const ChatState());
+
+  Future<void> stopTtsPlayback() async {
+    _ttsPlaybackGeneration++;
+    await _tts.stop();
+  }
+
+  Future<void> speakText(String text) async {
+    if (!_tts.isEnabled) return;
+    _ttsPlaybackGeneration++;
+    final normalized = _normalizeTtsText(text);
+    if (normalized.isEmpty) return;
+    await _tts.speak(normalized);
+  }
+
+  String _normalizeTtsText(String text) {
+    return text
+        .replaceAll('•', '')
+        .replaceAll('⚠️', 'Warning.')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  Future<void> _speakCardsSequentially(List<RepairCard> cards) async {
+    if (!_tts.isEnabled) return;
+    final runId = ++_ttsPlaybackGeneration;
+    for (final card in cards) {
+      if (!_tts.isEnabled || runId != _ttsPlaybackGeneration) break;
+      if (card.type == RepairCardType.followUp) continue;
+      final combined = _normalizeTtsText('${card.title}. ${card.body}');
+      if (combined.isEmpty) continue;
+      await _tts.speak(combined);
+      if (runId != _ttsPlaybackGeneration) break;
+    }
+  }
 
   // Structured JSON system prompt — optimised for small quantised mobile models
   static const String _systemPrompt =
@@ -164,11 +220,45 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Load an existing session
   Future<void> loadSession(ChatSession session) async {
     _cactus.resetConversation();
+    final messages = List<AppMessage>.from(session.messages);
+    final assistantMessages = messages
+        .where((m) => m.isAssistant && m.content.trim().isNotEmpty)
+        .toList();
+
+    final hydratedCards = <RepairCard>[];
+    RepairResponse? hydratedLastResponse;
+
+    for (final assistant in assistantMessages) {
+      final parser = RepairResponseParser();
+      parser.feed(assistant.content);
+      final parsed = parser.finalize();
+      final cards = _buildCards(
+        parsed,
+        isGenerating: false,
+        rawBuffer: assistant.content,
+      );
+      if (cards.isNotEmpty) {
+        hydratedCards.addAll(cards);
+        hydratedLastResponse = parsed;
+      }
+    }
+
+    if (hydratedCards.isNotEmpty) {
+      hydratedCards.add(const RepairCard(
+        type: RepairCardType.followUp,
+        title: 'Any Questions?',
+        body: '',
+      ));
+    }
+
     state = state.copyWith(
       activeSession: session,
-      messages: List.from(session.messages),
+      messages: messages,
       streamingText: null,
-      cards: [],
+      errorMessage: null,
+      isStreaming: false,
+      cards: hydratedCards,
+      lastResponse: hydratedLastResponse,
     );
   }
 
@@ -204,6 +294,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
 
     final updatedMessages = [...state.messages, userMsg];
+    final modelMessages =
+        _messagesForModel(updatedMessages, appendTo: appendTo);
     state = state.copyWith(
       messages: updatedMessages,
       isStreaming: true,
@@ -226,7 +318,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     try {
       await for (final token in _cactus.chat(
-        updatedMessages,
+        modelMessages,
         systemPrompt: _systemPrompt,
         maxTokens: _settings.maxTokens,
         temperature: _settings.temperature,
@@ -277,12 +369,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final allCards = <RepairCard>[
       ...(appendTo ?? <RepairCard>[]),
       ...freshFinal,
-      if (appendTo == null || appendTo.isEmpty)
-        const RepairCard(
-          type: RepairCardType.followUp,
-          title: 'Any Questions?',
-          body: '',
-        ),
+      const RepairCard(
+        type: RepairCardType.followUp,
+        title: 'Any Questions?',
+        body: '',
+      ),
     ];
 
     final finalMessages = List<AppMessage>.from(state.messages);
@@ -306,13 +397,40 @@ class ChatNotifier extends StateNotifier<ChatState> {
       await _storage.saveSession(state.activeSession!);
     }
 
-    // TTS
-    if (mounted && _ttsEnabled && finalResponse.steps.isNotEmpty) {
-      final text = finalResponse.steps
-          .map((s) => '${s.title}. ${s.description}')
-          .join(' ');
-      await _tts.speak(text);
+    if (mounted && _tts.isEnabled) {
+      await _speakCardsSequentially(freshFinal);
     }
+  }
+
+  List<AppMessage> _messagesForModel(
+    List<AppMessage> messages, {
+    List<RepairCard>? appendTo,
+  }) {
+    if (appendTo == null || appendTo.isEmpty) return messages;
+
+    final context = appendTo
+        .where((c) => c.type != RepairCardType.followUp)
+        .map((c) => '${c.title}: ${c.body}')
+        .join('\n\n')
+        .trim();
+    if (context.isEmpty) return messages;
+
+    final trimmedContext = context.length > 3000
+        ? context.substring(context.length - 3000)
+        : context;
+
+    final contextMsg = AppMessage(
+      id: _uuid.v4(),
+      role: 'system',
+      content:
+          'Continue the same repair conversation. Use this previous guidance as context:\n$trimmedContext',
+      timestamp: DateTime.now(),
+    );
+
+    final out = List<AppMessage>.from(messages);
+    final insertAt = out.isEmpty ? 0 : out.length - 1;
+    out.insert(insertAt, contextMsg);
+    return out;
   }
 
   /// Build the cards list from the current parsed response.
@@ -366,9 +484,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
           title: partial.title.isNotEmpty
               ? 'Step ${partial.number}: ${partial.title}'
               : 'Step ${response.steps.length + 1}…',
-          body: partial.description.isNotEmpty
-              ? partial.description
-              : '…',
+          body: partial.description.isNotEmpty ? partial.description : '…',
           isLoading: partial.description.isEmpty,
         ));
       } else if (cards.isNotEmpty) {
@@ -417,12 +533,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
       bool inStr = false, esc = false;
       while (i < len) {
         final ch = raw[i];
-        if (esc) { esc = false; }
-        else if (ch == '\\' && inStr) { esc = true; }
-        else if (ch == '"') { inStr = !inStr; }
-        else if (!inStr) {
+        if (esc) {
+          esc = false;
+        } else if (ch == '\\' && inStr) {
+          esc = true;
+        } else if (ch == '"') {
+          inStr = !inStr;
+        } else if (!inStr) {
           if (ch == '{') depth++;
-          if (ch == '}') { depth--; if (depth == 0) { i++; break; } }
+          if (ch == '}') {
+            depth--;
+            if (depth == 0) {
+              i++;
+              break;
+            }
+          }
         }
         i++;
       }
@@ -437,7 +562,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
     if (i >= len) return null;
 
-    final fragment = raw.substring(i); // e.g. {"number":2, "title":"Foo", "description":"Bar...
+    final fragment = raw
+        .substring(i); // e.g. {"number":2, "title":"Foo", "description":"Bar...
 
     int? number;
     String title = '';
@@ -446,7 +572,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final numM = RegExp(r'"number"\s*:\s*(\d+)').firstMatch(fragment);
     if (numM != null) number = int.tryParse(numM.group(1)!);
 
-    final titleM = RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(fragment);
+    final titleM =
+        RegExp(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(fragment);
     if (titleM != null) title = titleM.group(1)!.replaceAll(r'\"', '"');
 
     // For description, grab whatever is after `"description":"` even if cut off
@@ -458,8 +585,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       bool esc2 = false;
       for (final ch in after.runes) {
         final c = String.fromCharCode(ch);
-        if (esc2) { sb.write(c); esc2 = false; continue; }
-        if (c == '\\') { esc2 = true; continue; }
+        if (esc2) {
+          sb.write(c);
+          esc2 = false;
+          continue;
+        }
+        if (c == '\\') {
+          esc2 = true;
+          continue;
+        }
         if (c == '"') break; // closing quote
         sb.write(c);
       }
@@ -479,7 +613,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final hasPerms = await _audio.hasPermission();
     if (!hasPerms) {
       state = state.copyWith(
-          errorMessage: 'Microphone permission denied. Please enable in Settings.');
+          errorMessage:
+              'Microphone permission denied. Please enable in Settings.');
       return;
     }
     await _audio.startRecording();
@@ -524,7 +659,6 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     audio,
     tts,
     modelState.activeModelId,
-    settings.ttsEnabled,
     settings,
   );
 });

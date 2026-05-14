@@ -165,18 +165,19 @@ class ModelCard extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (!compact)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text(
-                  aiModel.errorMessage ?? 'Error',
-                  style: TextStyle(
-                      color: AppTheme.red400,
-                      fontSize: 11),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+            Padding(
+              padding: EdgeInsets.only(bottom: compact ? 4 : 6),
+              child: Text(
+                aiModel.errorMessage ?? 'Error',
+                style: TextStyle(
+                  color: AppTheme.red400,
+                  fontSize: compact ? 10 : 11,
+                  fontWeight: FontWeight.w600,
                 ),
+                maxLines: compact ? 2 : 1,
+                overflow: TextOverflow.ellipsis,
               ),
+            ),
             _PrimaryBtn(
               icon: Icons.refresh_rounded,
               label: aiModel.localDirPath != null ? 'Retry Load' : 'Retry',
@@ -243,8 +244,7 @@ class _Header extends StatelessWidget {
               ),
             ],
           ),
-          child: Icon(model.icon, color: Colors.white,
-              size: compact ? 20 : 24),
+          child: Icon(model.icon, color: Colors.white, size: compact ? 20 : 24),
         ),
         const SizedBox(width: 12),
         // Name + meta — Flexible prevents right overflow
@@ -268,8 +268,10 @@ class _Header extends StatelessWidget {
                   const SizedBox(width: 3),
                   Text(
                     model.sizeLabel,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: AppTheme.onSurfaceSub),
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(color: AppTheme.onSurfaceSub),
                   ),
                   const SizedBox(width: 6),
                   _QuantChip(label: model.quantization),
@@ -324,13 +326,12 @@ class _PrimaryBtn extends StatelessWidget {
       child: ElevatedButton.icon(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
-          backgroundColor:
-              onTap == null ? AppTheme.tertiary : AppTheme.primary,
+          backgroundColor: onTap == null ? AppTheme.tertiary : AppTheme.primary,
           foregroundColor: Colors.white,
-          padding: EdgeInsets.symmetric(
-              vertical: compact ? 0 : 4, horizontal: 12),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          padding:
+              EdgeInsets.symmetric(vertical: compact ? 0 : 4, horizontal: 12),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           elevation: 2,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
@@ -347,8 +348,7 @@ class _PrimaryBtn extends StatelessWidget {
         label: Text(
           label,
           style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: compact ? 12 : 13),
+              fontWeight: FontWeight.w600, fontSize: compact ? 12 : 13),
           overflow: TextOverflow.ellipsis,
         ),
       ),
@@ -379,13 +379,14 @@ class _ProgressWidget extends StatelessWidget {
           children: [
             Text(
               isExtracting ? 'Extracting…' : 'Downloading…',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppTheme.onSurfaceSub),
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: AppTheme.onSurfaceSub),
             ),
             Text(pctStr,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: AppTheme.primary,
-                      fontWeight: FontWeight.w700)),
+                    color: AppTheme.primary, fontWeight: FontWeight.w700)),
           ],
         ),
         const SizedBox(height: 5),
@@ -411,15 +412,19 @@ class _ProgressWidget extends StatelessWidget {
               Text(
                 '${(p.bytesReceived / 1e9).toStringAsFixed(1)} / '
                 '${(p.totalBytes / 1e9).toStringAsFixed(1)} GB',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: AppTheme.onSurfaceSub),
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: AppTheme.onSurfaceSub),
               ),
               if (p.speedBps > 0) ...[
                 const Spacer(),
                 Text(
                   StorageUtils.formatSpeed(p.speedBps),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppTheme.onSurfaceSub),
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelSmall
+                      ?.copyWith(color: AppTheme.onSurfaceSub),
                 ),
               ],
             ],

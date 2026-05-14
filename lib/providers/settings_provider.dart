@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppSettings {
   final bool ttsEnabled;
   final bool autoSpeak;
+  final bool debugJsonEnabled;
   final double speechRate;
   final bool darkMode;
   final int maxTokens;
@@ -15,6 +16,7 @@ class AppSettings {
   const AppSettings({
     this.ttsEnabled = false,
     this.autoSpeak = false,
+    this.debugJsonEnabled = false,
     this.speechRate = 0.55,
     this.darkMode = false,
     this.maxTokens = 2048,
@@ -29,6 +31,7 @@ class AppSettings {
   AppSettings copyWith({
     bool? ttsEnabled,
     bool? autoSpeak,
+    bool? debugJsonEnabled,
     double? speechRate,
     bool? darkMode,
     int? maxTokens,
@@ -41,6 +44,7 @@ class AppSettings {
       AppSettings(
         ttsEnabled: ttsEnabled ?? this.ttsEnabled,
         autoSpeak: autoSpeak ?? this.autoSpeak,
+        debugJsonEnabled: debugJsonEnabled ?? this.debugJsonEnabled,
         speechRate: speechRate ?? this.speechRate,
         darkMode: darkMode ?? this.darkMode,
         maxTokens: maxTokens ?? this.maxTokens,
@@ -61,6 +65,7 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     state = AppSettings(
       ttsEnabled: prefs.getBool('tts_enabled') ?? false,
       autoSpeak: prefs.getBool('auto_speak') ?? false,
+      debugJsonEnabled: prefs.getBool('debug_json_enabled') ?? false,
       speechRate: prefs.getDouble('speech_rate') ?? 0.55,
       maxTokens: prefs.getInt('max_tokens') ?? 2048,
       temperature: prefs.getDouble('temperature') ?? 1.0,
@@ -74,6 +79,12 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     state = state.copyWith(ttsEnabled: v);
     final p = await SharedPreferences.getInstance();
     await p.setBool('tts_enabled', v);
+  }
+
+  Future<void> setDebugJsonEnabled(bool v) async {
+    state = state.copyWith(debugJsonEnabled: v);
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('debug_json_enabled', v);
   }
 
   Future<void> setSpeechRate(double v) async {

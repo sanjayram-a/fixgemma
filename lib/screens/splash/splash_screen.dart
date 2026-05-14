@@ -43,28 +43,6 @@ class _SplashScreenState extends State<SplashScreen>
       body: Stack(
         children: [
           const FloatingOrbsBackground(),
-          FadeTransition(
-            opacity: _fade,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 60),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Logo / Name area
-                  const SizedBox(height: 60),
-                  _SkeletonBar(width: 160, height: 32, radius: 12),
-                  const SizedBox(height: 12),
-                  _SkeletonBar(width: 230, height: 16, radius: 8),
-                  const SizedBox(height: 48),
-                  // Model card skeleton 1
-                  _SkeletonCard(),
-                  const SizedBox(height: 20),
-                  // Model card skeleton 2
-                  _SkeletonCard(),
-                ],
-              ),
-            ),
-          ),
           // Centered logo text
           Center(
             child: FadeTransition(
@@ -116,108 +94,6 @@ class _SplashScreenState extends State<SplashScreen>
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SkeletonBar extends StatefulWidget {
-  final double width;
-  final double height;
-  final double radius;
-  const _SkeletonBar(
-      {required this.width, required this.height, required this.radius});
-
-  @override
-  State<_SkeletonBar> createState() => _SkeletonBarState();
-}
-
-class _SkeletonBarState extends State<_SkeletonBar>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) => Container(
-        width: widget.width,
-        height: widget.height,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(widget.radius),
-          gradient: LinearGradient(
-            colors: [
-              AppTheme.tertiary.withValues(alpha: 0.3 + 0.3 * _ctrl.value),
-              AppTheme.tertiary.withValues(alpha: 0.1),
-              AppTheme.tertiary.withValues(alpha: 0.3 + 0.3 * _ctrl.value),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SkeletonCard extends StatefulWidget {
-  @override
-  State<_SkeletonCard> createState() => _SkeletonCardState();
-}
-
-class _SkeletonCardState extends State<_SkeletonCard>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) => Container(
-        width: double.infinity,
-        height: 140,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppTheme.tertiary.withValues(alpha: 0.25 + 0.2 * _ctrl.value),
-              AppTheme.secondary.withValues(alpha: 0.12),
-              AppTheme.tertiary.withValues(alpha: 0.25 + 0.2 * _ctrl.value),
-            ],
-          ),
-          border: Border.all(
-            color: AppTheme.frostedBorder,
-            width: 1.2,
-          ),
-        ),
       ),
     );
   }

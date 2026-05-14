@@ -59,6 +59,10 @@ class _HomeTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final computedCardHeight = ((screenHeight - 290) / 2).clamp(170.0, 250.0);
+    final cardHeight = computedCardHeight.toDouble();
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 22),
@@ -97,28 +101,23 @@ class _HomeTab extends ConsumerWidget {
                     color: AppTheme.onSurfaceSub,
                   ),
             ),
+            const SizedBox(height: 10),
             // ── Model Cards ───────────────────────────────────────────────
-            // Flexible + FractionallySizedBox keeps cards slightly shorter
-            // than the full available height — user-requested size reduction.
-            Flexible(
-              child: FractionallySizedBox(
-                heightFactor: 0.88,
-                alignment: Alignment.topCenter,
-                child: Column(
-                  children: [
-                    // Model 1 — Full size
-                    Expanded(
-                      child: ModelCard(model: kAvailableModels[0]),
-                    ),
-                    const SizedBox(height: 16),
-                    // Model 2 — Lite
-                    Expanded(
-                      child: ModelCard(model: kAvailableModels[1]),
-                    ),
-                    // Space for bottom nav
-                    const SizedBox(height: 70),
-                  ],
-                ),
+            Expanded(
+              child: ListView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 90),
+                children: [
+                  SizedBox(
+                    height: cardHeight,
+                    child: ModelCard(model: kAvailableModels[0]),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: cardHeight,
+                    child: ModelCard(model: kAvailableModels[1]),
+                  ),
+                ],
               ),
             ),
           ],
@@ -218,8 +217,7 @@ class _NavItem extends StatelessWidget {
                 duration: const Duration(milliseconds: 200),
                 style: Theme.of(context).textTheme.labelSmall!.copyWith(
                       color: color,
-                      fontWeight:
-                          isActive ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
                     ),
                 child: Text(label),
               ),

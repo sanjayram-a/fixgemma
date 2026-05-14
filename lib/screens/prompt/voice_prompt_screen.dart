@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/page_transitions.dart';
@@ -27,6 +29,12 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
   List<File> _images = [];
   String? _recordedPath;
   bool _isPlaying = false;
+  Duration _playbackPosition = Duration.zero;
+  Duration _playbackDuration = Duration.zero;
+  late final AudioPlayer _previewPlayer;
+  StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration>? _durationSub;
 
   late final AnimationController _pulseCtrl;
   late final AnimationController _waveCtrl;
@@ -40,10 +48,28 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
     _waveCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1200))
       ..repeat();
+
+    _previewPlayer = AudioPlayer();
+    _playerStateSub = _previewPlayer.onPlayerStateChanged.listen((state) {
+      if (!mounted) return;
+      setState(() => _isPlaying = state == PlayerState.playing);
+    });
+    _positionSub = _previewPlayer.onPositionChanged.listen((pos) {
+      if (!mounted) return;
+      setState(() => _playbackPosition = pos);
+    });
+    _durationSub = _previewPlayer.onDurationChanged.listen((dur) {
+      if (!mounted) return;
+      setState(() => _playbackDuration = dur);
+    });
   }
 
   @override
   void dispose() {
+    _playerStateSub?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _previewPlayer.dispose();
     _pulseCtrl.dispose();
     _waveCtrl.dispose();
     super.dispose();
@@ -58,9 +84,28 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
       if (!mounted) return;
       setState(() => _recordedPath = path);
     } else {
-      setState(() => _recordedPath = null);
+      await _previewPlayer.stop();
+      setState(() {
+        _recordedPath = null;
+        _playbackPosition = Duration.zero;
+        _playbackDuration = Duration.zero;
+      });
       await chat.startVoiceRecording();
     }
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_recordedPath == null) return;
+    if (_isPlaying) {
+      await _previewPlayer.stop();
+      return;
+    }
+    await _previewPlayer.stop();
+    await _previewPlayer.play(DeviceFileSource(_recordedPath!));
+  }
+
+  Future<void> _seek(double seconds) async {
+    await _previewPlayer.seek(Duration(milliseconds: (seconds * 1000).round()));
   }
 
   Future<void> _pickImage() async {
@@ -137,6 +182,17 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                                       color: AppTheme.green400,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600)),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: _togglePlayback,
+                                child: Icon(
+                                  _isPlaying
+                                      ? Icons.stop_circle_rounded
+                                      : Icons.play_circle_fill_rounded,
+                                  color: AppTheme.primary,
+                                  size: 18,
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -177,8 +233,8 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                             height: 140 + 20 * _pulseCtrl.value,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: AppTheme.red400
-                                  .withValues(alpha: 0.08 + 0.08 * _pulseCtrl.value),
+                              color: AppTheme.red400.withValues(
+                                  alpha: 0.08 + 0.08 * _pulseCtrl.value),
                             ),
                           ),
                         ),
@@ -189,8 +245,8 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                             height: 120 + 12 * _pulseCtrl.value,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: AppTheme.red400
-                                  .withValues(alpha: 0.12 + 0.08 * _pulseCtrl.value),
+                              color: AppTheme.red400.withValues(
+                                  alpha: 0.12 + 0.08 * _pulseCtrl.value),
                             ),
                           ),
                         ),
@@ -220,9 +276,7 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                           ],
                         ),
                         child: Icon(
-                          isRecording
-                              ? Icons.stop_rounded
-                              : Icons.mic_rounded,
+                          isRecording ? Icons.stop_rounded : Icons.mic_rounded,
                           color: Colors.white,
                           size: 44,
                         ),
@@ -235,6 +289,34 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
 
                 // Audio wave visualiser (decorative while recording)
                 if (isRecording) _WaveVisualiser(controller: _waveCtrl),
+
+                if (!isRecording && hasRecording) ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28),
+                    child: Column(
+                      children: [
+                        Slider(
+                          value: _playbackPosition.inMilliseconds
+                              .clamp(0, _playbackDuration.inMilliseconds)
+                              .toDouble(),
+                          max: (_playbackDuration.inMilliseconds <= 0
+                                  ? 1
+                                  : _playbackDuration.inMilliseconds)
+                              .toDouble(),
+                          onChanged: (v) => _seek(v / 1000),
+                        ),
+                        Text(
+                          '${_fmt(_playbackPosition)} / ${_fmt(_playbackDuration)}',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: AppTheme.onSurfaceSub),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 const Spacer(),
 
@@ -250,8 +332,7 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                         separatorBuilder: (_, __) => const SizedBox(width: 8),
                         itemBuilder: (_, i) => _ImageThumb(
                           file: _images[i],
-                          onRemove: () =>
-                              setState(() => _images.removeAt(i)),
+                          onRemove: () => setState(() => _images.removeAt(i)),
                         ),
                       ),
                     ),
@@ -313,6 +394,12 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
       ),
     );
   }
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
 }
 
 // ── Audio wave visualiser (decorative) ──────────────────────────────────────
@@ -369,8 +456,7 @@ class _GlassIconBtn extends StatelessWidget {
   final VoidCallback onTap;
   final String? tooltip;
 
-  const _GlassIconBtn(
-      {required this.icon, required this.onTap, this.tooltip});
+  const _GlassIconBtn({required this.icon, required this.onTap, this.tooltip});
 
   @override
   Widget build(BuildContext context) {
@@ -403,8 +489,7 @@ class _ImageThumb extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
-          child:
-              Image.file(file, width: 72, height: 72, fit: BoxFit.cover),
+          child: Image.file(file, width: 72, height: 72, fit: BoxFit.cover),
         ),
         Positioned(
           top: -6,

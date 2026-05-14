@@ -39,11 +39,13 @@ class SettingsScreen extends ConsumerWidget {
                         const SizedBox(width: 4),
                         Text(
                           'Settings',
-                          style:
-                              Theme.of(context).textTheme.displaySmall?.copyWith(
-                                    color: AppTheme.primary,
-                                    fontWeight: FontWeight.w800,
-                                  ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .displaySmall
+                              ?.copyWith(
+                                color: AppTheme.primary,
+                                fontWeight: FontWeight.w800,
+                              ),
                         ),
                       ],
                     ),
@@ -69,8 +71,8 @@ class SettingsScreen extends ConsumerWidget {
                         child: _ModelSettingsTile(
                           def: def,
                           aiModel: aiModel,
-                          onDelete: () =>
-                              _confirmDelete(context, ref, def.id, def.displayName),
+                          onDelete: () => _confirmDelete(
+                              context, ref, def.id, def.displayName),
                         ),
                       );
                     },
@@ -111,13 +113,12 @@ class SettingsScreen extends ConsumerWidget {
                             value: settings.topP,
                             min: 0.1,
                             max: 1.0,
-                            divisions: 9,
+                            divisions: 18,
                             format: (v) => v.toStringAsFixed(2),
                             tooltip:
                                 'Nucleus sampling. Lower = fewer token choices, more predictable.',
-                            onChanged: (v) => ref
-                                .read(settingsProvider.notifier)
-                                .setTopP(v),
+                            onChanged: (v) =>
+                                ref.read(settingsProvider.notifier).setTopP(v),
                           ),
                           const Divider(height: 24),
                           // Top-K
@@ -157,6 +158,34 @@ class SettingsScreen extends ConsumerWidget {
 
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
+                // ── Developer section ────────────────────────────────────
+                _SectionHeader(label: 'Developer'),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: FrostedGlassCard(
+                      borderRadius: 20,
+                      blur: 14,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      child: _ToggleTile(
+                        icon: Icons.bug_report_rounded,
+                        label: 'Debug JSON Button',
+                        subtitle:
+                            'Show JSON response viewer in response screen',
+                        tooltip:
+                            'Turn on to show the JSON debug button in response view.',
+                        value: settings.debugJsonEnabled,
+                        onChanged: (v) => ref
+                            .read(settingsProvider.notifier)
+                            .setDebugJsonEnabled(v),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
                 // ── Accessibility section ────────────────────────────────
                 _SectionHeader(label: 'Accessibility'),
                 SliverPadding(
@@ -173,6 +202,8 @@ class SettingsScreen extends ConsumerWidget {
                             icon: Icons.record_voice_over_rounded,
                             label: 'Text-to-Speech',
                             subtitle: 'Read repair steps aloud',
+                            tooltip:
+                                'Enable voice playback for generated repair guidance.',
                             value: settings.ttsEnabled,
                             onChanged: (v) => ref
                                 .read(settingsProvider.notifier)
@@ -181,8 +212,7 @@ class SettingsScreen extends ConsumerWidget {
                           if (settings.ttsEnabled) ...[
                             const Divider(height: 0),
                             Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                               child: _SliderRow(
                                 label: 'Speech Rate',
                                 value: settings.speechRate,
@@ -217,8 +247,7 @@ class SettingsScreen extends ConsumerWidget {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Delete "$name"?'),
         content: const Text(
             'This removes all model files from your device. You can re-download later.'),
@@ -337,6 +366,7 @@ class _ToggleTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final String subtitle;
+  final String tooltip;
   final bool value;
   final ValueChanged<bool> onChanged;
 
@@ -344,6 +374,7 @@ class _ToggleTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.subtitle,
+    required this.tooltip,
     required this.value,
     required this.onChanged,
   });
@@ -362,11 +393,21 @@ class _ToggleTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label,
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleSmall
-                        ?.copyWith(color: AppTheme.onSurface)),
+                Row(
+                  children: [
+                    Text(label,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleSmall
+                            ?.copyWith(color: AppTheme.onSurface)),
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: tooltip,
+                      child: Icon(Icons.info_outline_rounded,
+                          size: 14, color: AppTheme.onSurfaceSub),
+                    ),
+                  ],
+                ),
                 Text(subtitle,
                     style: Theme.of(context)
                         .textTheme
@@ -404,6 +445,23 @@ class _SliderRow extends StatelessWidget {
     required this.onChanged,
   });
 
+  void _showInfoDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('$label info'),
+        content: Text(tooltip),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -422,14 +480,20 @@ class _SliderRow extends StatelessWidget {
                 const SizedBox(width: 6),
                 Tooltip(
                   message: tooltip,
-                  child: Icon(Icons.info_outline_rounded,
-                      size: 14, color: AppTheme.onSurfaceSub),
+                  child: IconButton(
+                    icon: const Icon(Icons.info_outline_rounded, size: 16),
+                    color: AppTheme.onSurfaceSub,
+                    splashRadius: 16,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 24, height: 24),
+                    onPressed: () => _showInfoDialog(context),
+                  ),
                 ),
               ],
             ),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
                 color: AppTheme.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
