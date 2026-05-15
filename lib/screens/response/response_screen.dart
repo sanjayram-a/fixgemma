@@ -50,6 +50,7 @@ class _ResponseScreenState extends ConsumerState<ResponseScreen> {
     final cards = chatState.cards;
     final isStreaming = chatState.isStreaming;
     final messages = chatState.messages;
+    final autoTtsCardIndex = chatState.autoTtsCardIndex;
     final showDebugJson = ref.watch(settingsProvider).debugJsonEnabled;
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
@@ -67,6 +68,7 @@ class _ResponseScreenState extends ConsumerState<ResponseScreen> {
         });
       }
     }
+
     _prevCardCount = cards.length;
 
     // Build all cards: prompt card first, then response cards
@@ -78,6 +80,21 @@ class _ResponseScreenState extends ConsumerState<ResponseScreen> {
     // Total pages = 1 prompt card + response cards
     final totalPages = 1 + cards.length;
     final clampedPage = _currentPage.clamp(0, totalPages - 1);
+
+    if (autoTtsCardIndex != null) {
+      final targetPage = (autoTtsCardIndex + 1).clamp(0, totalPages - 1);
+      if (_currentPage != targetPage) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pageCtrl.hasClients) {
+            _pageCtrl.animateToPage(
+              targetPage,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+            );
+          }
+        });
+      }
+    }
 
     return Scaffold(
       backgroundColor: AppTheme.bgColor,
@@ -375,9 +392,10 @@ class _PromptCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final audioPath = message?.audioPath as String?;
     final hasImages =
         message?.imagePaths != null && (message.imagePaths as List).isNotEmpty;
-    final hasAudio = message?.audioPath != null;
+    final hasAudio = audioPath != null;
     final text = (message?.content as String? ?? '').trim();
 
     return FrostedGlassCard(
@@ -458,10 +476,10 @@ class _PromptCard extends StatelessWidget {
                               height: 1.65,
                             ),
                       ),
-                    if (hasAudio && text.isEmpty)
-                      _InlineAudioPlayer(
-                        filePath: message.audioPath as String,
-                      ),
+                    if (hasAudio) ...[
+                      if (text.isNotEmpty) const SizedBox(height: 14),
+                      _InlineAudioPlayer(filePath: audioPath!),
+                    ],
                     if (hasImages) ...[
                       if (text.isNotEmpty || hasAudio)
                         const SizedBox(height: 14),
@@ -854,6 +872,7 @@ class _RepairCardState extends State<_RepairCard>
           Icons.check_circle_outline_rounded
         ),
       RepairCardType.tips => (AppTheme.green400, Icons.lightbulb_rounded),
+      RepairCardType.userPrompt => (AppTheme.secondary, Icons.person_rounded),
       _ => (AppTheme.tertiary, Icons.info_rounded),
     };
   }

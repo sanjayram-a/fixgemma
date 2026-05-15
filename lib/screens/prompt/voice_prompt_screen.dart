@@ -94,6 +94,30 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
     }
   }
 
+  Future<void> _clearRecording() async {
+    await _previewPlayer.stop();
+    if (!mounted) return;
+    setState(() {
+      _recordedPath = null;
+      _isPlaying = false;
+      _playbackPosition = Duration.zero;
+      _playbackDuration = Duration.zero;
+    });
+  }
+
+  Future<void> _onMainButtonTap() async {
+    final isRecording = ref.read(chatProvider).isRecording;
+    if (isRecording) {
+      await _toggleRecording();
+      return;
+    }
+    if (_recordedPath != null) {
+      await _clearRecording();
+      return;
+    }
+    await _toggleRecording();
+  }
+
   Future<void> _togglePlayback() async {
     if (_recordedPath == null) return;
     if (_isPlaying) {
@@ -109,6 +133,49 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
   }
 
   Future<void> _pickImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded),
+                title: const Text('Camera'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded),
+                title: const Text('Gallery'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || source == null) return;
+
+    if (source == ImageSource.camera) {
+      final picked = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        setState(() => _images = [..._images, File(picked.path)]);
+      }
+      return;
+    }
+
     final picked = await _picker.pickMultiImage(imageQuality: 85);
     if (picked.isNotEmpty) {
       setState(
@@ -207,7 +274,7 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                   isRecording
                       ? 'Recording…'
                       : hasRecording
-                          ? 'Recording ready'
+                          ? 'Recording ready • Tap X to discard'
                           : 'Tap to start',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: isRecording
@@ -220,7 +287,7 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
 
                 // ── Big mic button ──────────────────────────────────────
                 GestureDetector(
-                  onTap: _toggleRecording,
+                  onTap: _onMainButtonTap,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
@@ -262,13 +329,17 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                           gradient: RadialGradient(
                             colors: isRecording
                                 ? [AppTheme.red400, const Color(0xFFB71C1C)]
-                                : [AppTheme.secondary, AppTheme.primary],
+                                : hasRecording
+                                    ? [AppTheme.red400, const Color(0xFFD84315)]
+                                    : [AppTheme.secondary, AppTheme.primary],
                           ),
                           boxShadow: [
                             BoxShadow(
                               color: (isRecording
                                       ? AppTheme.red400
-                                      : AppTheme.primary)
+                                      : hasRecording
+                                          ? AppTheme.red400
+                                          : AppTheme.primary)
                                   .withValues(alpha: 0.45),
                               blurRadius: 30,
                               spreadRadius: 2,
@@ -276,7 +347,11 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                           ],
                         ),
                         child: Icon(
-                          isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                          isRecording
+                              ? Icons.stop_rounded
+                              : hasRecording
+                                  ? Icons.close_rounded
+                                  : Icons.mic_rounded,
                           color: Colors.white,
                           size: 44,
                         ),
@@ -296,6 +371,32 @@ class _VoicePromptScreenState extends ConsumerState<VoicePromptScreen>
                     padding: const EdgeInsets.symmetric(horizontal: 28),
                     child: Column(
                       children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            IconButton(
+                              onPressed: _togglePlayback,
+                              icon: Icon(
+                                _isPlaying
+                                    ? Icons.stop_circle_rounded
+                                    : Icons.play_circle_fill_rounded,
+                                color: AppTheme.primary,
+                                size: 30,
+                              ),
+                              tooltip: _isPlaying ? 'Stop audio' : 'Play audio',
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _isPlaying
+                                  ? 'Playing voice prompt'
+                                  : 'Play voice prompt',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: AppTheme.onSurfaceSub),
+                            ),
+                          ],
+                        ),
                         Slider(
                           value: _playbackPosition.inMilliseconds
                               .clamp(0, _playbackDuration.inMilliseconds)

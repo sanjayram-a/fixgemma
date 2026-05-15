@@ -36,6 +36,49 @@ class _TextPromptScreenState extends ConsumerState<TextPromptScreen> {
   }
 
   Future<void> _pickImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded),
+                title: const Text('Camera'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded),
+                title: const Text('Gallery'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || source == null) return;
+
+    if (source == ImageSource.camera) {
+      final picked = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        setState(() => _images = [..._images, File(picked.path)]);
+      }
+      return;
+    }
+
     final picked = await _picker.pickMultiImage(imageQuality: 85);
     if (picked.isNotEmpty) {
       setState(() {
@@ -204,8 +247,8 @@ class _TextPromptScreenState extends ConsumerState<TextPromptScreen> {
                                     const SizedBox(width: 8),
                                 itemBuilder: (_, i) => _ImageThumb(
                                   file: _images[i],
-                                  onRemove: () => setState(
-                                      () => _images.removeAt(i)),
+                                  onRemove: () =>
+                                      setState(() => _images.removeAt(i)),
                                 ),
                               ),
                             ),
@@ -329,8 +372,7 @@ class _ImageThumb extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(10),
-          child: Image.file(file,
-              width: 72, height: 72, fit: BoxFit.cover),
+          child: Image.file(file, width: 72, height: 72, fit: BoxFit.cover),
         ),
         Positioned(
           top: -6,

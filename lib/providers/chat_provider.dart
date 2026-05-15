@@ -44,7 +44,7 @@ final ttsServiceProvider = Provider<TtsService>((ref) {
 
 // ── Repair Card State ──────────────────────────────────────────────────────
 /// Represents one "card" shown in the response carousel.
-enum RepairCardType { safety, tools, step, tips, followUp }
+enum RepairCardType { safety, tools, step, tips, userPrompt, followUp }
 
 class RepairCard {
   final RepairCardType type;
@@ -78,6 +78,7 @@ class ChatState {
   final String? streamingText;
   final String? errorMessage;
   final bool isRecording;
+  final int? autoTtsCardIndex;
 
   // Structured response data
   final List<RepairCard> cards;
@@ -92,6 +93,7 @@ class ChatState {
     this.streamingText,
     this.errorMessage,
     this.isRecording = false,
+    this.autoTtsCardIndex,
     this.cards = const [],
     this.lastResponse,
     this.lastInferenceMeta,
@@ -105,6 +107,7 @@ class ChatState {
     Object? streamingText = _unset,
     Object? errorMessage = _unset,
     bool? isRecording,
+    Object? autoTtsCardIndex = _unset,
     List<RepairCard>? cards,
     Object? lastResponse = _unset,
     Object? lastInferenceMeta = _unset,
@@ -123,6 +126,9 @@ class ChatState {
             ? this.errorMessage
             : errorMessage as String?,
         isRecording: isRecording ?? this.isRecording,
+        autoTtsCardIndex: identical(autoTtsCardIndex, _unset)
+            ? this.autoTtsCardIndex
+            : autoTtsCardIndex as int?,
         cards: cards ?? this.cards,
         lastResponse: identical(lastResponse, _unset)
             ? this.lastResponse
@@ -148,6 +154,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> stopTtsPlayback() async {
     _ttsPlaybackGeneration++;
+    if (mounted) {
+      state = state.copyWith(autoTtsCardIndex: null);
+    }
     await _tts.stop();
   }
 
@@ -167,15 +176,37 @@ class ChatNotifier extends StateNotifier<ChatState> {
         .trim();
   }
 
-  Future<void> _speakCardsSequentially(List<RepairCard> cards) async {
+  Future<void> _speakCardsSequentially(
+    List<RepairCard> cards, {
+    required int baseOffset,
+    required bool enabled,
+  }) async {
+    if (!enabled) return;
     final runId = ++_ttsPlaybackGeneration;
-    for (final card in cards) {
+
+    for (int i = 0; i < cards.length; i++) {
       if (runId != _ttsPlaybackGeneration) break;
-      if (card.type == RepairCardType.followUp) continue;
+      final liveSettings = _getSettings();
+      if (!liveSettings.ttsEnabled) break;
+
+      final card = cards[i];
+      if (card.type == RepairCardType.followUp ||
+          card.type == RepairCardType.userPrompt ||
+          card.isLoading) {
+        continue;
+      }
+
       final combined = _normalizeTtsText('${card.title}. ${card.body}');
       if (combined.isEmpty) continue;
+
+      if (mounted) {
+        state = state.copyWith(autoTtsCardIndex: baseOffset + i);
+      }
       await _tts.speak(combined);
-      if (runId != _ttsPlaybackGeneration) break;
+    }
+
+    if (mounted && runId == _ttsPlaybackGeneration) {
+      state = state.copyWith(autoTtsCardIndex: null);
     }
   }
 
@@ -220,6 +251,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       cards: [],
       lastResponse: null,
       lastInferenceMeta: null,
+      autoTtsCardIndex: null,
     );
   }
 
@@ -266,6 +298,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       cards: hydratedCards,
       lastResponse: hydratedLastResponse,
       lastInferenceMeta: null,
+      autoTtsCardIndex: null,
     );
   }
 
@@ -284,12 +317,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final hasAudio = audioPath != null;
     if (text.trim().isEmpty && !hasImages && !hasAudio) return;
 
-    if (text.trim().isEmpty && hasImages) {
+    if (text.trim().isEmpty && hasAudio && hasImages) {
+      text =
+          'Please diagnose this issue using my attached voice note and image.';
+    } else if (text.trim().isEmpty && hasAudio) {
+      text = 'Voice input. Please transcribe and provide repair guidance.';
+    } else if (text.trim().isEmpty && hasImages) {
       text = "What's wrong with this? Please diagnose the issue.";
     }
 
     if (state.activeSession == null) await newChat();
     if (!mounted) return;
+
+    final followUpPromptCard = appendTo != null && appendTo.isNotEmpty
+        ? RepairCard(
+            type: RepairCardType.userPrompt,
+            title: 'Follow-up Question',
+            body: text.trim(),
+          )
+        : null;
 
     final userMsg = AppMessage(
       id: _uuid.v4(),
@@ -327,6 +373,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final useHybrid = settings.inferenceMode == InferenceMode.cloudAndLocal;
     _tts.setEnabled(settings.ttsEnabled);
     await _tts.setSpeechRate(settings.speechRate);
+    await stopTtsPlayback();
 
     try {
       await for (final token in _cactus.chat(
@@ -354,7 +401,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
           isGenerating: true,
         );
         final cards = appendTo != null
-            ? <RepairCard>[...appendTo, ...freshCards]
+            ? <RepairCard>[
+                ...appendTo,
+                if (followUpPromptCard != null) followUpPromptCard,
+                ...freshCards,
+              ]
             : freshCards;
 
         final newMessages = List<AppMessage>.from(state.messages);
@@ -386,6 +437,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Append follow-up card only on the first generation (not on follow-ups)
     final allCards = <RepairCard>[
       ...(appendTo ?? <RepairCard>[]),
+      if (followUpPromptCard != null) followUpPromptCard,
       ...freshFinal,
       const RepairCard(
         type: RepairCardType.followUp,
@@ -407,6 +459,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       cards: allCards,
       lastResponse: finalResponse,
       lastInferenceMeta: _cactus.lastCompletionMeta,
+      autoTtsCardIndex: state.autoTtsCardIndex,
     );
 
     // Save session immediately after generation
@@ -416,9 +469,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       await _storage.saveSession(state.activeSession!);
     }
 
-    if (mounted && settings.ttsEnabled) {
-      await _speakCardsSequentially(freshFinal);
-    }
+    await _speakCardsSequentially(
+      freshFinal,
+      baseOffset:
+          (appendTo?.length ?? 0) + (followUpPromptCard != null ? 1 : 0),
+      enabled: settings.ttsEnabled,
+    );
   }
 
   List<AppMessage> _messagesForModel(

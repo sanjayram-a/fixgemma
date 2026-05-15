@@ -55,11 +55,19 @@ class ChatStorage {
     session.updatedAt = DateTime.now();
 
     // Auto-title from first user message
-    if (session.title == 'New Repair Session' &&
-        session.messages.isNotEmpty) {
+    if (session.title == 'New Repair Session' && session.messages.isNotEmpty) {
       final firstUser = session.messages
           .firstWhere((m) => m.isUser, orElse: () => session.messages.first);
-      final t = firstUser.content;
+      var t = firstUser.content.trim();
+      if (t.isEmpty && firstUser.audioPath != null) {
+        t = 'Voice input';
+      } else if (t.isEmpty &&
+          firstUser.imagePaths != null &&
+          firstUser.imagePaths!.isNotEmpty) {
+        t = 'Image input';
+      } else if (t.isEmpty) {
+        t = 'Repair session';
+      }
       session.title = t.length > 40 ? '${t.substring(0, 40)}…' : t;
     }
 
