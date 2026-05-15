@@ -39,7 +39,7 @@ class _ResponseScreenState extends ConsumerState<ResponseScreen> {
 
   @override
   void dispose() {
-    ref.read(chatProvider.notifier).stopTtsPlayback();
+    ref.read(ttsServiceProvider).stop();
     _pageCtrl.dispose();
     super.dispose();
   }

@@ -19,9 +19,10 @@ class RepairStep {
         title: j['title'] as String? ?? 'Step',
         description: j['description'] as String? ?? '',
         // Coerce empty string → null so callers can use a simple null-check
-        warning: j['warning'] is String && (j['warning'] as String).trim().isNotEmpty
-            ? j['warning'] as String
-            : null,
+        warning:
+            j['warning'] is String && (j['warning'] as String).trim().isNotEmpty
+                ? j['warning'] as String
+                : null,
       );
 }
 
@@ -82,7 +83,7 @@ class RepairResponseParser {
   RepairResponse finalize() {
     final raw = _buffer.toString();
     // Prefer full JSON decode; fall back to partial extractor.
-    final cleaned = _stripFences(raw);
+    final cleaned = _removeTrailingCommas(_stripFences(raw));
     try {
       final j = jsonDecode(cleaned) as Map<String, dynamic>;
       _current = _fromFullJson(j, isComplete: true);
@@ -99,8 +100,7 @@ class RepairResponseParser {
 
     // ── safety ─────────────────────────────────────────────────────────────
     String? safety = _current.safetyMessage;
-    final safetyM =
-        RegExp(r'"safety"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(s);
+    final safetyM = RegExp(r'"safety"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(s);
     if (safetyM != null) safety = _unescape(safetyM.group(1)!);
 
     // ── tools ──────────────────────────────────────────────────────────────
@@ -120,8 +120,7 @@ class RepairResponseParser {
 
     // ── tips ───────────────────────────────────────────────────────────────
     List<String>? tips = _current.tips;
-    final tipsM =
-        RegExp(r'"tips"\s*:\s*\[(.*?)\]', dotAll: true).firstMatch(s);
+    final tipsM = RegExp(r'"tips"\s*:\s*\[(.*?)\]', dotAll: true).firstMatch(s);
     if (tipsM != null) {
       final inner = tipsM.group(1)!;
       tips = RegExp(r'"((?:[^"\\]|\\.)*)"')
@@ -194,7 +193,13 @@ class RepairResponseParser {
         final j = jsonDecode(objStr) as Map<String, dynamic>;
         steps.add(RepairStep.fromJson(j));
       } catch (_) {
-        // Malformed object — skip it.
+        try {
+          final fixed = _removeTrailingCommas(objStr);
+          final j = jsonDecode(fixed) as Map<String, dynamic>;
+          steps.add(RepairStep.fromJson(j));
+        } catch (_) {
+          // Malformed object — skip it.
+        }
       }
       i = objEnd + 1;
     }
@@ -211,16 +216,20 @@ class RepairResponseParser {
 
   // ── Full JSON decode (used in finalize) ────────────────────────────────────
 
-  RepairResponse _fromFullJson(
-      Map<String, dynamic> j, {required bool isComplete}) {
+  RepairResponse _fromFullJson(Map<String, dynamic> j,
+      {required bool isComplete}) {
     // Normalise "" → null so _buildCards can skip the card
     final safetyRaw = j['safety'] as String?;
-    String? safety = (safetyRaw != null && safetyRaw.trim().isNotEmpty) ? safetyRaw : null;
+    String? safety =
+        (safetyRaw != null && safetyRaw.trim().isNotEmpty) ? safetyRaw : null;
 
     List<String>? tools;
     final toolsRaw = j['tools'];
     if (toolsRaw is List) {
-      final t = toolsRaw.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+      final t = toolsRaw
+          .whereType<String>()
+          .where((s) => s.trim().isNotEmpty)
+          .toList();
       if (t.isNotEmpty) tools = t;
     }
 
@@ -235,7 +244,10 @@ class RepairResponseParser {
     List<String>? tips;
     final tipsRaw = j['tips'];
     if (tipsRaw is List) {
-      final t = tipsRaw.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+      final t = tipsRaw
+          .whereType<String>()
+          .where((s) => s.trim().isNotEmpty)
+          .toList();
       if (t.isNotEmpty) tips = t;
     }
 
@@ -256,6 +268,16 @@ class RepairResponseParser {
         .replaceAll(RegExp(r'```json\s*'), '')
         .replaceAll(RegExp(r'```\s*'), '')
         .trim();
+  }
+
+  /// Remove JSON trailing commas before closing braces/brackets.
+  String _removeTrailingCommas(String input) {
+    var out = input;
+    while (true) {
+      final next = out.replaceAll(RegExp(r',\s*([}\]])'), r'$1');
+      if (next == out) return out;
+      out = next;
+    }
   }
 
   /// Basic JSON string unescaping for captured regex groups.
