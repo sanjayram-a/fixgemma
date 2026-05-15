@@ -16,10 +16,12 @@ class CactusService {
   CactusModelT? _model;
   CactusServiceState _state = CactusServiceState.idle;
   String? _errorMessage;
+  Map<String, dynamic>? _lastCompletionMeta;
   final _stateController = StreamController<CactusServiceState>.broadcast();
 
   CactusServiceState get state => _state;
   String? get errorMessage => _errorMessage;
+  Map<String, dynamic>? get lastCompletionMeta => _lastCompletionMeta;
   bool get isReady => _state == CactusServiceState.ready;
   Stream<CactusServiceState> get stateStream => _stateController.stream;
 
@@ -93,7 +95,11 @@ class CactusService {
     double topP = 0.95,
     int topK = 64,
     String? systemPrompt,
+    String completionMode = 'local',
+    String? cactusToken,
   }) async* {
+    _lastCompletionMeta = null;
+
     if (!isReady) {
       print('[CactusService] chat() called but not ready (state=$_state)');
       yield 'Model is not ready yet. Please wait.';
@@ -119,6 +125,9 @@ class CactusService {
       'temperature': temperature,
       'top_p': topP,
       'top_k': topK,
+      'completion_mode': completionMode,
+      if (cactusToken != null && cactusToken.trim().isNotEmpty)
+        'cactus_token': cactusToken.trim(),
     });
 
     print('[CactusService] Starting cactusComplete in background isolate...');
@@ -145,9 +154,17 @@ class CactusService {
           break;
         } else if (msg is String) {
           yield msg;
-        } else if (msg is Map && msg.containsKey('error')) {
-          yield '\n\n*Error: ${msg['error']}*';
-          break;
+        } else if (msg is Map) {
+          if (msg.containsKey('error')) {
+            yield '\n\n*Error: ${msg['error']}*';
+            break;
+          }
+          if (msg.containsKey('meta')) {
+            final meta = msg['meta'];
+            if (meta is Map) {
+              _lastCompletionMeta = Map<String, dynamic>.from(meta);
+            }
+          }
         }
       }
       receivePort.close();
@@ -310,13 +327,38 @@ void _completeInIsolate(_IsolateArgs args) {
     // Native heap memory is shared across all isolates in the same process.
     final model = Pointer<Void>.fromAddress(args.modelAddress);
 
-    cactusComplete(
+    final result = cactusComplete(
       model,
       args.messagesJson,
       args.optionsJson,
       null, // toolsJson
       (token, _) => args.sendPort.send(token),
     );
+
+    try {
+      final parsed = jsonDecode(result);
+      if (parsed is Map<String, dynamic>) {
+        final meta = <String, dynamic>{
+          if (parsed['cloud_handoff'] != null)
+            'cloud_handoff': parsed['cloud_handoff'],
+          if (parsed['time_to_first_token_ms'] != null)
+            'time_to_first_token_ms': parsed['time_to_first_token_ms'],
+          if (parsed['total_time_ms'] != null)
+            'total_time_ms': parsed['total_time_ms'],
+          if (parsed['decode_tps'] != null) 'decode_tps': parsed['decode_tps'],
+          if (parsed['prefill_tps'] != null)
+            'prefill_tps': parsed['prefill_tps'],
+          if (parsed['confidence'] != null) 'confidence': parsed['confidence'],
+          if (parsed['total_tokens'] != null)
+            'total_tokens': parsed['total_tokens'],
+        };
+        if (meta.isNotEmpty) {
+          args.sendPort.send({'meta': meta});
+        }
+      }
+    } catch (_) {
+      // Ignore non-JSON final payloads.
+    }
 
     // Signal completion
     args.sendPort.send(null);

@@ -1,10 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum InferenceMode { localOnly, cloudAndLocal }
+
 class AppSettings {
   final bool ttsEnabled;
   final bool autoSpeak;
   final bool debugJsonEnabled;
+  final InferenceMode inferenceMode;
+  final String? cactusToken;
   final double speechRate;
   final bool darkMode;
   final int maxTokens;
@@ -17,6 +21,8 @@ class AppSettings {
     this.ttsEnabled = false,
     this.autoSpeak = false,
     this.debugJsonEnabled = false,
+    this.inferenceMode = InferenceMode.localOnly,
+    this.cactusToken,
     this.speechRate = 0.55,
     this.darkMode = false,
     this.maxTokens = 2048,
@@ -32,6 +38,9 @@ class AppSettings {
     bool? ttsEnabled,
     bool? autoSpeak,
     bool? debugJsonEnabled,
+    InferenceMode? inferenceMode,
+    String? cactusToken,
+    bool clearCactusToken = false,
     double? speechRate,
     bool? darkMode,
     int? maxTokens,
@@ -45,6 +54,8 @@ class AppSettings {
         ttsEnabled: ttsEnabled ?? this.ttsEnabled,
         autoSpeak: autoSpeak ?? this.autoSpeak,
         debugJsonEnabled: debugJsonEnabled ?? this.debugJsonEnabled,
+        inferenceMode: inferenceMode ?? this.inferenceMode,
+        cactusToken: clearCactusToken ? null : cactusToken ?? this.cactusToken,
         speechRate: speechRate ?? this.speechRate,
         darkMode: darkMode ?? this.darkMode,
         maxTokens: maxTokens ?? this.maxTokens,
@@ -66,6 +77,11 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
       ttsEnabled: prefs.getBool('tts_enabled') ?? false,
       autoSpeak: prefs.getBool('auto_speak') ?? false,
       debugJsonEnabled: prefs.getBool('debug_json_enabled') ?? false,
+      inferenceMode:
+          (prefs.getString('inference_mode') ?? 'localOnly') == 'cloudAndLocal'
+              ? InferenceMode.cloudAndLocal
+              : InferenceMode.localOnly,
+      cactusToken: prefs.getString('cactus_token'),
       speechRate: prefs.getDouble('speech_rate') ?? 0.55,
       maxTokens: prefs.getInt('max_tokens') ?? 2048,
       temperature: prefs.getDouble('temperature') ?? 1.0,
@@ -85,6 +101,24 @@ class SettingsNotifier extends StateNotifier<AppSettings> {
     state = state.copyWith(debugJsonEnabled: v);
     final p = await SharedPreferences.getInstance();
     await p.setBool('debug_json_enabled', v);
+  }
+
+  Future<void> setInferenceMode(InferenceMode mode) async {
+    state = state.copyWith(inferenceMode: mode);
+    final p = await SharedPreferences.getInstance();
+    await p.setString('inference_mode', mode.name);
+  }
+
+  Future<void> setCactusToken(String v) async {
+    final token = v.trim();
+    final p = await SharedPreferences.getInstance();
+    if (token.isEmpty) {
+      state = state.copyWith(clearCactusToken: true);
+      await p.remove('cactus_token');
+      return;
+    }
+    state = state.copyWith(cactusToken: token);
+    await p.setString('cactus_token', token);
   }
 
   Future<void> setSpeechRate(double v) async {

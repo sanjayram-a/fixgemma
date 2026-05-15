@@ -1185,6 +1185,7 @@ class _RawJsonDebugSheetState extends ConsumerState<_RawJsonDebugSheet> {
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
     final isStreaming = chatState.isStreaming;
+    final meta = chatState.lastInferenceMeta;
     // Prefer live streamingText; fall back to the last assistant message
     final rawJson = chatState.streamingText ??
         (chatState.messages.isNotEmpty
@@ -1339,15 +1340,44 @@ class _RawJsonDebugSheetState extends ConsumerState<_RawJsonDebugSheet> {
                     padding: EdgeInsets.fromLTRB(
                         16, 8, 16, MediaQuery.of(context).padding.bottom + 8),
                     color: Colors.white.withValues(alpha: 0.03),
-                    child: Text(
-                      '${rawJson.length} chars  \u2022  '
-                      '${rawJson.split('\n').length} lines'
-                      '${isStreaming ? '  \u2022  streaming…' : '  \u2022  complete'}',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        color: Colors.white.withValues(alpha: 0.35),
-                        fontFamily: 'monospace',
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${rawJson.length} chars  \u2022  '
+                          '${rawJson.split('\n').length} lines'
+                          '${isStreaming ? '  \u2022  streaming…' : '  \u2022  complete'}',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: Colors.white.withValues(alpha: 0.35),
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        if (meta != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'handoff=${meta['cloud_handoff'] ?? '-'}  '
+                            'decode_tps=${_fmtMeta(meta['decode_tps'])}  '
+                            'prefill_tps=${_fmtMeta(meta['prefill_tps'])}',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: Colors.white.withValues(alpha: 0.55),
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          Text(
+                            'ttft_ms=${_fmtMeta(meta['time_to_first_token_ms'])}  '
+                            'total_ms=${_fmtMeta(meta['total_time_ms'])}  '
+                            'tokens=${meta['total_tokens'] ?? '-'}',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: Colors.white.withValues(alpha: 0.55),
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ],
@@ -1357,6 +1387,14 @@ class _RawJsonDebugSheetState extends ConsumerState<_RawJsonDebugSheet> {
         );
       },
     );
+  }
+
+  String _fmtMeta(dynamic value) {
+    if (value is num) {
+      if (value == value.roundToDouble()) return value.toInt().toString();
+      return value.toStringAsFixed(1);
+    }
+    return value?.toString() ?? '-';
   }
 }
 

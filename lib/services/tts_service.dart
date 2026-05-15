@@ -1,7 +1,10 @@
 import 'package:flutter_tts/flutter_tts.dart';
+import 'dart:async';
 
 class TtsService {
   final _tts = FlutterTts();
+  final Completer<void> _initCompleter = Completer<void>();
+  bool _initialized = false;
   bool _isEnabled = true;
   bool _isSpeaking = false;
   double _speechRate = 0.55;
@@ -11,6 +14,7 @@ class TtsService {
   double get speechRate => _speechRate;
 
   Future<void> init() async {
+    if (_initialized) return;
     await _tts.awaitSpeakCompletion(true);
     await _tts.setLanguage('en-US');
     await _tts.setSpeechRate(_speechRate);
@@ -21,9 +25,18 @@ class TtsService {
     _tts.setCompletionHandler(() => _isSpeaking = false);
     _tts.setCancelHandler(() => _isSpeaking = false);
     _tts.setErrorHandler((_) => _isSpeaking = false);
+    _initialized = true;
+    if (!_initCompleter.isCompleted) _initCompleter.complete();
+  }
+
+  Future<void> _ensureInit() async {
+    if (_initialized) return;
+    await init();
+    await _initCompleter.future;
   }
 
   Future<void> speak(String text) async {
+    await _ensureInit();
     if (!_isEnabled) return;
     await _tts.stop();
     _isSpeaking = false;
@@ -40,6 +53,7 @@ class TtsService {
   }
 
   Future<void> stop() async {
+    await _ensureInit();
     await _tts.stop();
     _isSpeaking = false;
   }
@@ -53,6 +67,7 @@ class TtsService {
   }
 
   Future<void> setSpeechRate(double rate) async {
+    await _ensureInit();
     _speechRate = rate;
     await _tts.setSpeechRate(rate);
   }

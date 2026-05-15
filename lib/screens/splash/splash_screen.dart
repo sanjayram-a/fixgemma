@@ -50,39 +50,11 @@ class _SplashScreenState extends State<SplashScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // App icon orb
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          AppTheme.secondary,
-                          AppTheme.primary,
-                        ],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.primary.withValues(alpha: 0.4),
-                          blurRadius: 30,
-                          spreadRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.build_rounded,
-                        color: Colors.white, size: 36),
+                  Image.asset(
+                    'assets/images/logo.png',
+                    width: 250,
                   ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'FixGemma',
-                    style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                          color: AppTheme.primary,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.5,
-                        ),
-                  ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 16),
                   Text(
                     'AI Appliance Repair Assistant',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(

@@ -82,6 +82,7 @@ class ChatState {
   // Structured response data
   final List<RepairCard> cards;
   final RepairResponse? lastResponse;
+  final Map<String, dynamic>? lastInferenceMeta;
 
   const ChatState({
     this.activeSession,
@@ -93,6 +94,7 @@ class ChatState {
     this.isRecording = false,
     this.cards = const [],
     this.lastResponse,
+    this.lastInferenceMeta,
   });
 
   ChatState copyWith({
@@ -105,6 +107,7 @@ class ChatState {
     bool? isRecording,
     List<RepairCard>? cards,
     Object? lastResponse = _unset,
+    Object? lastInferenceMeta = _unset,
   }) =>
       ChatState(
         activeSession: identical(activeSession, _unset)
@@ -124,6 +127,9 @@ class ChatState {
         lastResponse: identical(lastResponse, _unset)
             ? this.lastResponse
             : lastResponse as RepairResponse?,
+        lastInferenceMeta: identical(lastInferenceMeta, _unset)
+            ? this.lastInferenceMeta
+            : lastInferenceMeta as Map<String, dynamic>?,
       );
 }
 
@@ -133,11 +139,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final AudioService _audio;
   final TtsService _tts;
   final String? _activeModelId;
-  final AppSettings _settings;
+  final AppSettings Function() _getSettings;
   int _ttsPlaybackGeneration = 0;
 
   ChatNotifier(this._cactus, this._storage, this._audio, this._tts,
-      this._activeModelId, this._settings)
+      this._activeModelId, this._getSettings)
       : super(const ChatState());
 
   Future<void> stopTtsPlayback() async {
@@ -162,10 +168,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   Future<void> _speakCardsSequentially(List<RepairCard> cards) async {
-    if (!_tts.isEnabled) return;
     final runId = ++_ttsPlaybackGeneration;
     for (final card in cards) {
-      if (!_tts.isEnabled || runId != _ttsPlaybackGeneration) break;
+      if (runId != _ttsPlaybackGeneration) break;
       if (card.type == RepairCardType.followUp) continue;
       final combined = _normalizeTtsText('${card.title}. ${card.body}');
       if (combined.isEmpty) continue;
@@ -214,6 +219,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       errorMessage: null,
       cards: [],
       lastResponse: null,
+      lastInferenceMeta: null,
     );
   }
 
@@ -259,6 +265,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       isStreaming: false,
       cards: hydratedCards,
       lastResponse: hydratedLastResponse,
+      lastInferenceMeta: null,
     );
   }
 
@@ -300,6 +307,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       messages: updatedMessages,
       isStreaming: true,
       streamingText: '',
+      lastInferenceMeta: null,
     );
 
     // Create placeholder assistant message
@@ -315,15 +323,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Stream and parse response
     final parser = RepairResponseParser();
     final buffer = StringBuffer();
+    final settings = _getSettings();
+    final useHybrid = settings.inferenceMode == InferenceMode.cloudAndLocal;
+    _tts.setEnabled(settings.ttsEnabled);
+    await _tts.setSpeechRate(settings.speechRate);
 
     try {
       await for (final token in _cactus.chat(
         modelMessages,
         systemPrompt: _systemPrompt,
-        maxTokens: _settings.maxTokens,
-        temperature: _settings.temperature,
-        topP: _settings.topP,
-        topK: _settings.topK,
+        maxTokens: settings.maxTokens,
+        temperature: settings.temperature,
+        topP: settings.topP,
+        topK: settings.topK,
+        completionMode: useHybrid ? 'hybrid' : 'local',
+        cactusToken: useHybrid
+            ? settings.cactusToken?.trim().isNotEmpty == true
+                ? settings.cactusToken!.trim()
+                : null
+            : null,
       )) {
         if (!mounted) return;
         buffer.write(token);
@@ -388,6 +406,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       streamingText: null,
       cards: allCards,
       lastResponse: finalResponse,
+      lastInferenceMeta: _cactus.lastCompletionMeta,
     );
 
     // Save session immediately after generation
@@ -397,7 +416,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       await _storage.saveSession(state.activeSession!);
     }
 
-    if (mounted && _tts.isEnabled) {
+    if (mounted && settings.ttsEnabled) {
       await _speakCardsSequentially(freshFinal);
     }
   }
@@ -651,7 +670,6 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final audio = ref.watch(audioServiceProvider);
   final tts = ref.watch(ttsServiceProvider);
   final modelState = ref.read(modelProvider);
-  final settings = ref.read(settingsProvider);
 
   return ChatNotifier(
     cactus,
@@ -659,7 +677,7 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     audio,
     tts,
     modelState.activeModelId,
-    settings,
+    () => ref.read(settingsProvider),
   );
 });
 

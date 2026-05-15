@@ -158,6 +158,60 @@ class SettingsScreen extends ConsumerWidget {
 
                 const SliverToBoxAdapter(child: SizedBox(height: 24)),
 
+                // ── Inference section ────────────────────────────────────
+                _SectionHeader(label: 'Inference'),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: FrostedGlassCard(
+                      borderRadius: 20,
+                      blur: 14,
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        children: [
+                          _DropdownRow<InferenceMode>(
+                            label: 'Mode',
+                            tooltip:
+                                'Choose inference routing: local on-device only, or hybrid cloud fallback.',
+                            value: settings.inferenceMode,
+                            items: const [
+                              DropdownMenuItem(
+                                value: InferenceMode.localOnly,
+                                child: Text('Local only'),
+                              ),
+                              DropdownMenuItem(
+                                value: InferenceMode.cloudAndLocal,
+                                child: Text('Cloud + local'),
+                              ),
+                            ],
+                            onChanged: (mode) {
+                              if (mode == null) return;
+                              ref
+                                  .read(settingsProvider.notifier)
+                                  .setInferenceMode(mode);
+                            },
+                          ),
+                          if (settings.inferenceMode ==
+                              InferenceMode.cloudAndLocal) ...[
+                            const Divider(height: 24),
+                            _TokenField(
+                              label: 'Cactus Cloud Token',
+                              tooltip:
+                                  'Required for cloud fallback requests in hybrid mode.',
+                              initialValue: settings.cactusToken ?? '',
+                              onSaved: (v) => ref
+                                  .read(settingsProvider.notifier)
+                                  .setCactusToken(v),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
                 // ── Developer section ────────────────────────────────────
                 _SectionHeader(label: 'Developer'),
                 SliverPadding(
@@ -419,6 +473,163 @@ class _ToggleTile extends StatelessWidget {
           Switch(value: value, onChanged: onChanged),
         ],
       ),
+    );
+  }
+}
+
+class _DropdownRow<T> extends StatelessWidget {
+  final String label;
+  final String tooltip;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+
+  const _DropdownRow({
+    required this.label,
+    required this.tooltip,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      color: AppTheme.onSurface,
+                      fontWeight: FontWeight.w600,
+                    )),
+            const SizedBox(width: 6),
+            Tooltip(
+              message: tooltip,
+              child: Icon(Icons.info_outline_rounded,
+                  size: 14, color: AppTheme.onSurfaceSub),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<T>(
+          value: value,
+          items: items,
+          onChanged: onChanged,
+          isExpanded: true,
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.5),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                  color: AppTheme.frostedBorder.withValues(alpha: 0.8)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                  color: AppTheme.frostedBorder.withValues(alpha: 0.8)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TokenField extends ConsumerStatefulWidget {
+  final String label;
+  final String tooltip;
+  final String initialValue;
+  final ValueChanged<String> onSaved;
+
+  const _TokenField({
+    required this.label,
+    required this.tooltip,
+    required this.initialValue,
+    required this.onSaved,
+  });
+
+  @override
+  ConsumerState<_TokenField> createState() => _TokenFieldState();
+}
+
+class _TokenFieldState extends ConsumerState<_TokenField> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TokenField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialValue != widget.initialValue &&
+        widget.initialValue != _ctrl.text) {
+      _ctrl.text = widget.initialValue;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(widget.label,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      color: AppTheme.onSurface,
+                      fontWeight: FontWeight.w600,
+                    )),
+            const SizedBox(width: 6),
+            Tooltip(
+              message: widget.tooltip,
+              child: Icon(Icons.info_outline_rounded,
+                  size: 14, color: AppTheme.onSurfaceSub),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _ctrl,
+          obscureText: true,
+          decoration: InputDecoration(
+            hintText: 'Enter cactus token',
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.5),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                  color: AppTheme.frostedBorder.withValues(alpha: 0.8)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                  color: AppTheme.frostedBorder.withValues(alpha: 0.8)),
+            ),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.save_rounded),
+              tooltip: 'Save token',
+              onPressed: () => widget.onSaved(_ctrl.text),
+            ),
+          ),
+          onSubmitted: widget.onSaved,
+        ),
+      ],
     );
   }
 }
