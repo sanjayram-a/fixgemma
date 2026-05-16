@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/hf_models.dart';
+import '../core/utils/cactus_model_locator.dart';
 import '../core/utils/storage_utils.dart';
 import '../models/download_state.dart';
 
@@ -128,6 +129,21 @@ class DownloadManager {
 
       final destDir = await StorageUtils.getModelDirectory(modelId);
       final tmpDir = await StorageUtils.getDownloadTempDirectory(modelId);
+      final stagingDir = Directory('${destDir.path}__staging');
+
+      // Start from a clean workspace for this attempt.
+      if (await tmpDir.exists()) {
+        try {
+          await tmpDir.delete(recursive: true);
+        } catch (_) {}
+      }
+      await tmpDir.create(recursive: true);
+      if (await stagingDir.exists()) {
+        try {
+          await stagingDir.delete(recursive: true);
+        } catch (_) {}
+      }
+      await stagingDir.create(recursive: true);
 
       _emit(
         modelId,
@@ -143,8 +159,13 @@ class DownloadManager {
       for (final zipName in zipFiles) {
         if (_cancelled) break;
         final ok = await _downloadAndExtract(
-            model, zipName, tmpDir.path, destDir.path);
+            model, zipName, tmpDir.path, stagingDir.path);
         if (!ok) {
+          try {
+            if (await stagingDir.exists()) {
+              await stagingDir.delete(recursive: true);
+            }
+          } catch (_) {}
           _emit(
             modelId,
             DownloadProgress(
@@ -159,6 +180,11 @@ class DownloadManager {
       }
 
       if (_cancelled) {
+        try {
+          if (await stagingDir.exists()) {
+            await stagingDir.delete(recursive: true);
+          }
+        } catch (_) {}
         _emit(
           modelId,
           const DownloadProgress(
@@ -169,6 +195,34 @@ class DownloadManager {
         );
         return false;
       }
+
+      // 3. Ensure the extracted result is actually a loadable model bundle.
+      final hasModel = await CactusModelLocator.hasModel(stagingDir.path);
+      if (!hasModel) {
+        try {
+          if (await stagingDir.exists()) {
+            await stagingDir.delete(recursive: true);
+          }
+        } catch (_) {}
+        _emit(
+          modelId,
+          const DownloadProgress(
+            status: DownloadStatus.failed,
+            errorMessage:
+                'Extraction finished but no model files were found. Please retry download.',
+          ),
+          force: true,
+        );
+        return false;
+      }
+
+      // 4. Atomically promote extracted files to the live model directory.
+      try {
+        if (await destDir.exists()) {
+          await destDir.delete(recursive: true);
+        }
+      } catch (_) {}
+      await stagingDir.rename(destDir.path);
 
       // 3. Clean up temp dir
       try {
@@ -269,14 +323,10 @@ class DownloadManager {
   /// Download a single zip using [FileDownloader] (background-safe), then
   /// extract it in-place via an Isolate.
   Future<bool> _downloadAndExtract(
-    HFModelDef model,
-    String zipName,
-    String tmpPath,
-    String destPath,
-  ) async {
+      HFModelDef model, String zipName, String tmpPath, String destPath,
+      {int attempt = 1}) async {
     final modelId = model.id;
-    final url =
-        'https://huggingface.co/${model.repoId}/resolve/main/$zipName';
+    final url = 'https://huggingface.co/${model.repoId}/resolve/main/$zipName';
     final zipFilePath = '$tmpPath/$zipName';
 
     // Ensure tmp dir exists
@@ -294,7 +344,9 @@ class DownloadManager {
         _totalDownloaded = (_completedZips + 1) * _zipProgressShare();
       } else {
         // Partial/corrupt — delete and re-download.
-        try { await zipFile.delete(); } catch (_) {}
+        try {
+          await zipFile.delete();
+        } catch (_) {}
       }
     }
 
@@ -308,7 +360,8 @@ class DownloadManager {
       // We then move the file to our custom tmpPath after completion.
       final appTmp = await getTemporaryDirectory();
       final bgSubdir = 'fixgemma_dl/$modelId';
-      final taskId = '${modelId}_$zipName'.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final taskId =
+          '${modelId}_$zipName'.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
 
       // Remove any stale task record with the same ID.
       await FileDownloader().cancelTasksWithIds([taskId]);
@@ -322,8 +375,9 @@ class DownloadManager {
         baseDirectory: BaseDirectory.temporary,
         group: _group,
         updates: Updates.statusAndProgress,
-        allowPause: true,   // Auto-pause/resume when the 9-min Android limit is hit
-        retries: 3,         // Retry up to 3× on failure
+        allowPause:
+            true, // Auto-pause/resume when the 9-min Android limit is hit
+        retries: 3, // Retry up to 3× on failure
         metaData: jsonEncode({'modelId': modelId, 'zipName': zipName}),
         displayName: 'Downloading $zipName',
       );
@@ -403,8 +457,7 @@ class DownloadManager {
 
       // Move the downloaded file from background_downloader's temp dir to our
       // custom tmpPath so the extraction step can find it.
-      final bgFile = File(
-          '${appTmp.path}/$bgSubdir/$zipName');
+      final bgFile = File('${appTmp.path}/$bgSubdir/$zipName');
       if (await bgFile.exists()) {
         await bgFile.rename(zipFilePath);
       } else {
@@ -439,10 +492,27 @@ class DownloadManager {
       zipPath: zipFilePath,
       destPath: destPath,
     );
-    if (!ok) return false;
+    if (!ok) {
+      if (attempt < 2 && !_cancelled) {
+        try {
+          final file = File(zipFilePath);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+        return _downloadAndExtract(
+          model,
+          zipName,
+          tmpPath,
+          destPath,
+          attempt: attempt + 1,
+        );
+      }
+      return false;
+    }
 
     // Delete zip after extraction to free space.
-    try { await File(zipFilePath).delete(); } catch (_) {}
+    try {
+      await File(zipFilePath).delete();
+    } catch (_) {}
 
     return true;
   }

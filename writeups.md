@@ -52,6 +52,10 @@ I then tried fine-tuning on the full dataset, but it was estimated to take over 
 
 After that, I switched to the Gemma 4 2B model and fine-tuned it on the same 10k samples. Both models gave satisfactory results.
 
+![metrics](https://www.googleapis.com/download/storage/v1/b/kaggle-user-content/o/inbox%2F33606546%2F373f56e5c6edf8d374327dc01563d8f8%2FScreenshot%202026-04-29%20184336.png?generation=1778883967070999&alt=media)
+*Figure 1: Weights & Biases training metrics for Gemma 4 E2B fine-tuning.*
+
+
 ## **Why Cactus?**
 
 - I tested both **LiteRT** and **Cactus** on my budget phone. I found that Cactus loads the model 2x faster than LiteRT and consumes 10x less memory thanks to its zero-copy memory mapping technique. It also uses less battery.
@@ -78,7 +82,7 @@ When I started research to collect datasets and web sources for fine-tuning, the
 
 When I needed to convert the model to Cactus format, I initially thought it would be a simple command-line tool. But it turned into a roller coaster. When I started the conversion, it pushed 40GB of junk files to my Hugging Face repo. After investigating, I discovered it was an Unsloth bug. So I had to restart the fine-tuning process, merge the LoRA in the same notebook, and then convert it. Thankfully, it worked and I only had to do this for one model.
 
-While building the app, I noticed that Cactus does not provide simple cloud usage. We need to contact their support team to get access. Because of this, I could only implement basic cloud hand-off. That was the sad part.
+While building the app, I noticed that Cactus does not provide simple cloud usage. We need to contact their support team to get access. Because of this, I could only implement basic cloud hand-off. 
 
 ## **Learnings**
 
@@ -88,6 +92,5 @@ While building the app, I noticed that Cactus does not provide simple cloud usag
 - I learned how challenging it is to optimize and deploy large models on real low-end budget smartphones while maintaining good speed and user experience.
 - I understood the importance of good UI/UX design — especially how a well-designed Carousel interface can make even slower inference feel smooth and user-friendly.
 
-##
 
-<p>Brought to life with the invaluable support of <a href="https://www.kaggle.com/renuka7812">@Renuka S</a></p>
+<p>Brought to life with the invaluable support of <a href="https://www.kaggle.com/renuka7812">@Renuka S.</a> </p>

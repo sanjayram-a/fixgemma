@@ -42,4 +42,4 @@ FixGemma is a Flutter application that leverages **Gemma 4** (e2b & e4b models) 
 4. Upon first launch, navigate to settings to download your preferred Gemma 4 model or from home screen.
 
 ## 📖 Documentation
-For a detailed overview of our Hackathon submission, problem statement, and technical challenges, please read the [Hackathon Writeup](HACKATHON_WRITEUP.md).
+For a detailed overview of our Hackathon submission, problem statement, and technical challenges, please read the [Hackathon Writeup](https://kaggle.com/competitions/gemma-4-good-hackathon/writeups/fixgemma).
