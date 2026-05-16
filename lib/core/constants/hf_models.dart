@@ -54,7 +54,7 @@ const List<HFModelDef> kAvailableModels = [
   HFModelDef(
     id: 'fixgemma-lite',
     repoId: 'sanjayram-a/fixgemma4-e2b-cact-INT4-zip',
-    displayName: 'FixGemma Lite',
+    displayName: 'FixGemma 4 E2B',
     description:
         'Compact 2B model with vision and audio support. Faster downloads, '
         'lower RAM usage. Great for quick repairs on any device.',

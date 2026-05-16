@@ -198,7 +198,8 @@ class RepairResponseParser {
           final j = jsonDecode(fixed) as Map<String, dynamic>;
           steps.add(RepairStep.fromJson(j));
         } catch (_) {
-          // Malformed object — skip it.
+          final fallback = _extractStepFromMalformed(objStr);
+          if (fallback != null) steps.add(fallback);
         }
       }
       i = objEnd + 1;
@@ -211,7 +212,61 @@ class RepairResponseParser {
   int _findStepsArrayStart(String src) {
     final m = RegExp(r'"steps"\s*:\s*\[').firstMatch(src);
     if (m == null) return -1;
-    return m.end; // index right after '['
+    return m.end;
+  }
+
+  /// Fallback: extract a [RepairStep] from a malformed step object string
+  /// when `jsonDecode` fails. Uses field-level regex to pull out `number`,
+  /// `title`, `description`, and `warning` even if the JSON is broken
+  /// (unescaped newlines, truncated strings, extra commas, etc.).
+  RepairStep? _extractStepFromMalformed(String raw) {
+    final number = _extractIntField(raw, 'number');
+    final title = _extractStringField(raw, 'title');
+    final description = _extractStringField(raw, 'description');
+    final warning = _extractStringField(raw, 'warning');
+
+    if (number == null && title.isEmpty && description.isEmpty) return null;
+
+    return RepairStep(
+      number: number ?? 0,
+      title: title.isEmpty ? 'Step' : title,
+      description: description,
+      warning: warning.isNotEmpty ? warning : null,
+    );
+  }
+
+  /// Extract an integer field from a raw JSON-like fragment.
+  int? _extractIntField(String raw, String key) {
+    final m = RegExp('"$key"\\s*:\\s*(\\d+)').firstMatch(raw);
+    if (m != null) return int.tryParse(m.group(1)!);
+    return null;
+  }
+
+  /// Extract a string field from a raw JSON-like fragment.
+  /// Handles both properly escaped strings and common LLM malformations
+  /// like unescaped newlines, missing closing quotes, etc.
+  String _extractStringField(String raw, String key) {
+    // Try properly quoted string first
+    final quotedM = RegExp('"$key"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"')
+        .firstMatch(raw);
+    if (quotedM != null) return _unescape(quotedM.group(1)!);
+
+    // Fallback: grab everything after `"key": "` until end or next `"key2":`
+    final looseM = RegExp('"$key"\\s*:\\s*"(.*)', dotAll: true).firstMatch(raw);
+    if (looseM != null) {
+      var value = looseM.group(1)!;
+      // Trim trailing junk: comma+whitespace, closing braces/brackets, or
+      // the start of the next key like `,"title":`
+      value = value
+          .replaceFirst(RegExp(r'"\s*[,}\]]', dotAll: true), '')
+          .replaceFirst(RegExp(r',\s*"[a-zA-Z_]"'), '')
+          .trim();
+      // Replace literal newlines with \n then unescape
+      value = value.replaceAll('\n', r'\n').replaceAll('\r', r'\r');
+      return _unescape(value);
+    }
+
+    return '';
   }
 
   // ── Full JSON decode (used in finalize) ────────────────────────────────────
