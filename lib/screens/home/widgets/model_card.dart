@@ -162,6 +162,8 @@ class ModelCard extends ConsumerWidget {
         );
 
       case ModelStatus.error:
+        final canRetryLoad = aiModel.localDirPath != null &&
+            progress?.status == DownloadStatus.completed;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -180,10 +182,10 @@ class ModelCard extends ConsumerWidget {
             ),
             _PrimaryBtn(
               icon: Icons.refresh_rounded,
-              label: aiModel.localDirPath != null ? 'Retry Load' : 'Retry',
+              label: canRetryLoad ? 'Retry Load' : 'Retry',
               onTap: () {
                 final n = ref.read(modelProvider.notifier);
-                if (aiModel.localDirPath != null) {
+                if (canRetryLoad) {
                   n.loadModel(model.id);
                 } else {
                   n.startDownload(model.id);
@@ -370,6 +372,7 @@ class _ProgressWidget extends StatelessWidget {
         ? (p?.extractProgress ?? 0.0)
         : (p?.overallProgress ?? 0.0);
     final pctStr = '${(pct * 100).toStringAsFixed(0)}%';
+    final isRetrying = p != null && p.retryAttempt > 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -377,12 +380,42 @@ class _ProgressWidget extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              isExtracting ? 'Extracting…' : 'Downloading…',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelSmall
-                  ?.copyWith(color: AppTheme.onSurfaceSub),
+            Flexible(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    isExtracting ? 'Extracting…' : 'Downloading…',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(color: AppTheme.onSurfaceSub),
+                  ),
+                  if (isRetrying) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF9800).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color:
+                              const Color(0xFFFF9800).withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Text(
+                        'Retry ${p.retryAttempt}/${p.maxRetries}',
+                        style: const TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFE65100),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
             Text(pctStr,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(

@@ -52,6 +52,24 @@ class TtsService {
     await _tts.speak(clean);
   }
 
+  /// Like [speak] but bypasses the [_isEnabled] gate.
+  /// Use for manually triggered speech (e.g. card play button) so it works
+  /// even when the auto-read setting is turned off.
+  Future<void> speakAlways(String text) async {
+    await _ensureInit();
+    await _tts.stop();
+    _isSpeaking = false;
+    final clean = text
+        .replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1')
+        .replaceAll(RegExp(r'\*(.+?)\*'), r'$1')
+        .replaceAll(RegExp(r'#+\s'), '')
+        .replaceAll(RegExp(r'\[(.+?)\]\(.+?\)'), r'$1')
+        .replaceAll('```', '')
+        .trim();
+    if (clean.isEmpty) return;
+    await _tts.speak(clean);
+  }
+
   Future<void> stop() async {
     await _ensureInit();
     await _tts.stop();

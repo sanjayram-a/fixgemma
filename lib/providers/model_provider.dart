@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants/hf_models.dart';
@@ -52,13 +53,16 @@ class ModelState {
       );
 }
 
-class ModelNotifier extends StateNotifier<ModelState> {
+class ModelNotifier extends StateNotifier<ModelState>
+    with WidgetsBindingObserver {
   final DownloadManager _downloader;
   final CactusService _cactus;
   final Map<String, StreamSubscription<DownloadProgress>> _subs = {};
 
   ModelNotifier(this._downloader, this._cactus)
-      : super(ModelState(models: _buildInitialModels()));
+      : super(ModelState(models: _buildInitialModels())) {
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   static List<AIModel> _buildInitialModels() {
     return kAvailableModels.map((def) => AIModel(id: def.id)).toList();
@@ -86,6 +90,42 @@ class ModelNotifier extends StateNotifier<ModelState> {
     } else {
       state = state.copyWith(models: List.from(state.models));
     }
+
+    // Check for downloads that were active when the app was killed.
+    await _recoverInFlightDownload();
+  }
+
+  /// Called by the lifecycle observer when the app comes back to foreground.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState appState) {
+    if (appState == AppLifecycleState.resumed) {
+      _recoverInFlightDownload();
+    }
+  }
+
+  /// Check if there's a download that was active before app kill/background
+  /// and resume it automatically.
+  Future<void> _recoverInFlightDownload() async {
+    final modelId = await _downloader.recoverAfterAppRestart();
+    if (modelId == null) return;
+
+    // Don't resume if already downloading or already completed.
+    final existing = state.models.firstWhere(
+      (m) => m.id == modelId,
+      orElse: () => AIModel(id: modelId),
+    );
+    if (existing.status == ModelStatus.downloading ||
+        existing.status == ModelStatus.downloaded ||
+        existing.status == ModelStatus.ready) {
+      return;
+    }
+
+    final def = modelById(modelId);
+    if (def == null) return;
+
+    // Re-trigger the download — it will check the ledger and skip
+    // already-extracted zips.
+    startDownload(modelId);
   }
 
   Future<void> startDownload(String modelId) async {
@@ -103,12 +143,20 @@ class ModelNotifier extends StateNotifier<ModelState> {
       // Update model status
       final models = state.models.map((m) {
         if (m.id != modelId) return m;
+
+        final shouldAttachLocalDir =
+            progress.status == DownloadStatus.completed ||
+                m.status == ModelStatus.downloaded ||
+                m.status == ModelStatus.ready ||
+                m.status == ModelStatus.loading;
+
         final updated2 = AIModel(
           id: m.id,
           status: _progressToModelStatus(progress.status),
           filesCompleted: progress.filesCompleted,
           totalFiles: progress.totalFiles,
-          localDirPath: m.localDirPath ?? localDir.path,
+          localDirPath:
+              shouldAttachLocalDir ? (m.localDirPath ?? localDir.path) : null,
           errorMessage: progress.errorMessage,
         );
         return updated2;
@@ -227,6 +275,7 @@ class ModelNotifier extends StateNotifier<ModelState> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     for (final sub in _subs.values) sub.cancel();
     super.dispose();
   }

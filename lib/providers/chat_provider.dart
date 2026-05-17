@@ -176,12 +176,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     await _tts.stop();
   }
 
+  /// Speak text triggered by the user manually (play button on a card).
+  /// Intentionally bypasses the [ttsEnabled] auto-read setting so the button
+  /// always works even when auto-read is turned off.
   Future<void> speakText(String text) async {
-    if (!_tts.isEnabled) return;
     _ttsPlaybackGeneration++;
     final normalized = _normalizeTtsText(text);
     if (normalized.isEmpty) return;
-    await _tts.speak(normalized);
+    // Use speak() directly to skip the _isEnabled guard that only affects
+    // auto-read. We still call _tts.stop() first via the speak() impl.
+    await _tts.speakAlways(normalized);
   }
 
   String _normalizeTtsText(String text) {
@@ -192,12 +196,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
         .trim();
   }
 
+  /// Enqueue a card for automatic TTS during streaming.
+  /// Only runs when [ttsEnabled] is true in settings (auto-read feature).
   void _enqueueAutoTts(
     RepairCard card, {
     required int runId,
     required int cardIndex,
     required bool enabled,
   }) {
+    // Respect the auto-read setting at enqueue time
     if (!enabled) return;
     if (card.type == RepairCardType.followUp ||
         card.type == RepairCardType.userPrompt ||
@@ -210,12 +217,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _ttsQueue = _ttsQueue.then((_) async {
       if (runId != _ttsPlaybackGeneration) return;
+      // Also respect the live setting in case it was toggled mid-stream
       final liveSettings = _getSettings();
       if (!liveSettings.ttsEnabled) return;
 
       if (mounted) {
         _setStateSafely(state.copyWith(autoTtsCardIndex: cardIndex));
       }
+      // Auto-read uses the gated speak() which honours _isEnabled
       await _tts.speak(combined);
 
       if (mounted && runId == _ttsPlaybackGeneration) {

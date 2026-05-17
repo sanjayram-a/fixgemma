@@ -14,30 +14,67 @@ import '../core/utils/cactus_model_locator.dart';
 import '../core/utils/storage_utils.dart';
 import '../models/download_state.dart';
 
-/// Downloads model zip file(s) from HuggingFace via the OS background download
-/// service (Android DownloadWorker / iOS URLSession) and then extracts them.
-///
-/// Strategy:
-///   1. Fetch file list from HF API — filter to .zip files only.
-///   2. Enqueue each zip through [FileDownloader] with allowPause + retries so
-///      the download continues even when the app is backgrounded or killed.
-///   3. Show a foreground notification so the OS keeps the service alive.
-///   4. After each zip lands in the temp directory, extract it via Isolate.
-///   5. Delete the zip after successful extraction to save space.
-class DownloadManager {
-  // ── FileDownloader task group ───────────────────────────────────────────
-  static const _group = 'model_zips';
+/// Persistent ledger entry stored in SharedPreferences so downloads survive
+/// app kill + restart. Tracks which zips have been fully extracted already.
+class _LedgerEntry {
+  final String modelId;
+  final String repoId;
+  final List<String> allZips;
+  final List<String> extractedZips;
+  final int totalBytes;
+  String status; // "active", "done", "failed"
 
-  // Used only for the HF manifest fetch (lightweight HEAD / GET calls).
+  _LedgerEntry({
+    required this.modelId,
+    required this.repoId,
+    required this.allZips,
+    required this.extractedZips,
+    required this.totalBytes,
+    this.status = 'active',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'modelId': modelId,
+        'repoId': repoId,
+        'allZips': allZips,
+        'extractedZips': extractedZips,
+        'totalBytes': totalBytes,
+        'status': status,
+      };
+
+  factory _LedgerEntry.fromJson(Map<String, dynamic> j) => _LedgerEntry(
+        modelId: j['modelId'] as String,
+        repoId: j['repoId'] as String,
+        allZips: List<String>.from(j['allZips'] as List),
+        extractedZips: List<String>.from(j['extractedZips'] as List),
+        totalBytes: j['totalBytes'] as int? ?? 0,
+        status: j['status'] as String? ?? 'active',
+      );
+}
+
+/// Downloads model zip file(s) from HuggingFace via the OS background download
+/// service and then extracts them.
+///
+/// Resilience features:
+///   - Persists a ledger so partially-completed multi-zip downloads survive
+///     app kill and resume only the remaining zips on next launch.
+///   - Each zip gets up to 3 download attempts.
+///   - On final failure the entire partial model is deleted so the user
+///     starts fresh on next try.
+///   - Foreground notification keeps the Android process alive.
+class DownloadManager {
+  static const _group = 'model_zips';
+  static const _maxRetries = 3;
+  static const _ledgerKey = 'dl_ledger';
+
   final _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(minutes: 5),
   ));
 
-  // Progress streams keyed by modelId.
   final _progressControllers = <String, StreamController<DownloadProgress>>{};
 
-  // ── Per-download state ──────────────────────────────────────────────────
+  // ── Per-download in-memory state ────────────────────────────────────────
   bool _cancelled = false;
   int _totalZips = 0;
   int _completedZips = 0;
@@ -59,13 +96,11 @@ class DownloadManager {
 
   void cancel() => _cancelled = true;
 
-  /// Initialise the [FileDownloader] singleton.
-  /// Call once from [main] (or lazily before first download).
+  /// Initialise the [FileDownloader] singleton + register callbacks so
+  /// tasks that finish while the app is dead are picked up on relaunch.
   static Future<void> initialise() async {
     await FileDownloader().start();
 
-    // Configure foreground notification (Android) so the OS keeps the process
-    // alive while downloading large model files.
     FileDownloader().configureNotificationForGroup(
       _group,
       running: const TaskNotification(
@@ -86,6 +121,17 @@ class DownloadManager {
       ),
       progressBar: true,
     );
+
+    // Track tasks so we can query completed/failed tasks after app restart.
+    FileDownloader().trackTasks();
+  }
+
+  /// Called on app resume / startup. Returns the modelId that was being
+  /// downloaded (if any) so the provider can re-subscribe to progress.
+  Future<String?> recoverAfterAppRestart() async {
+    final ledger = await _loadLedger();
+    if (ledger == null || ledger.status != 'active') return null;
+    return ledger.modelId;
   }
 
   /// Main entry point. Returns true on full success.
@@ -107,17 +153,14 @@ class DownloadManager {
       // 1. Fetch zip file list + real total size from HF API
       final manifest = await _fetchZipManifest(model.repoId);
       final zipFiles = manifest.files;
-      if (manifest.totalBytes > 0) {
-        _totalModelBytes = manifest.totalBytes;
-      }
+      if (manifest.totalBytes > 0) _totalModelBytes = manifest.totalBytes;
 
       if (zipFiles.isEmpty) {
         _emit(
           modelId,
           const DownloadProgress(
             status: DownloadStatus.failed,
-            errorMessage:
-                'No zip files found in the repository. Please check the model source.',
+            errorMessage: 'No zip files found in the repository.',
           ),
           force: true,
         );
@@ -131,19 +174,38 @@ class DownloadManager {
       final tmpDir = await StorageUtils.getDownloadTempDirectory(modelId);
       final stagingDir = Directory('${destDir.path}__staging');
 
-      // Start from a clean workspace for this attempt.
-      if (await tmpDir.exists()) {
-        try {
-          await tmpDir.delete(recursive: true);
-        } catch (_) {}
+      // Check ledger for a previous partial run so we can resume.
+      final existingLedger = await _loadLedger();
+      List<String> alreadyExtracted = [];
+
+      if (existingLedger != null &&
+          existingLedger.modelId == modelId &&
+          existingLedger.status == 'active') {
+        // Resume — keep staging dir and skip extracted zips.
+        alreadyExtracted = existingLedger.extractedZips;
+        _completedZips = alreadyExtracted.length;
+      } else {
+        // Fresh start — wipe everything.
+        for (final dir in [destDir, tmpDir, stagingDir]) {
+          if (await dir.exists()) {
+            try { await dir.delete(recursive: true); } catch (_) {}
+          }
+        }
+        await _purgeBgCache(modelId);
       }
+
       await tmpDir.create(recursive: true);
-      if (await stagingDir.exists()) {
-        try {
-          await stagingDir.delete(recursive: true);
-        } catch (_) {}
-      }
       await stagingDir.create(recursive: true);
+
+      // Persist ledger so we can resume after app kill.
+      final ledger = _LedgerEntry(
+        modelId: modelId,
+        repoId: model.repoId,
+        allZips: zipFiles,
+        extractedZips: List<String>.from(alreadyExtracted),
+        totalBytes: _totalModelBytes,
+      );
+      await _saveLedger(ledger);
 
       _emit(
         modelId,
@@ -151,40 +213,42 @@ class DownloadManager {
           status: DownloadStatus.downloading,
           totalFiles: _totalZips,
           totalBytes: _totalModelBytes,
+          filesCompleted: _completedZips,
         ),
         force: true,
       );
 
-      // 2. Download + extract each zip sequentially
+      // 2. Download + extract each zip (skip already-extracted ones)
       for (final zipName in zipFiles) {
         if (_cancelled) break;
-        final ok = await _downloadAndExtract(
-            model, zipName, tmpDir.path, stagingDir.path);
+        if (alreadyExtracted.contains(zipName)) continue;
+
+        final ok = await _downloadAndExtractWithRetries(
+          model, zipName, tmpDir.path, stagingDir.path, ledger,
+        );
         if (!ok) {
-          try {
-            if (await stagingDir.exists()) {
-              await stagingDir.delete(recursive: true);
-            }
-          } catch (_) {}
+          // Total failure on this zip — nuke everything.
+          await _nukeAllPartials(modelId, destDir, tmpDir, stagingDir);
+          await _clearLedger();
           _emit(
             modelId,
             DownloadProgress(
               status: DownloadStatus.failed,
-              errorMessage: 'Failed to download or extract $zipName',
+              errorMessage:
+                  'Failed to download $zipName after $_maxRetries attempts. '
+                  'All partial data deleted — tap Retry to start fresh.',
             ),
             force: true,
           );
           return false;
         }
         _completedZips++;
+        ledger.extractedZips.add(zipName);
+        await _saveLedger(ledger);
       }
 
       if (_cancelled) {
-        try {
-          if (await stagingDir.exists()) {
-            await stagingDir.delete(recursive: true);
-          }
-        } catch (_) {}
+        // Don't wipe on cancel — user may resume later.
         _emit(
           modelId,
           const DownloadProgress(
@@ -196,44 +260,42 @@ class DownloadManager {
         return false;
       }
 
-      // 3. Ensure the extracted result is actually a loadable model bundle.
+      // 3. Validate the extracted result is a loadable model.
       final hasModel = await CactusModelLocator.hasModel(stagingDir.path);
       if (!hasModel) {
-        try {
-          if (await stagingDir.exists()) {
-            await stagingDir.delete(recursive: true);
-          }
-        } catch (_) {}
+        await _nukeAllPartials(modelId, destDir, tmpDir, stagingDir);
+        await _clearLedger();
         _emit(
           modelId,
           const DownloadProgress(
             status: DownloadStatus.failed,
-            errorMessage:
-                'Extraction finished but no model files were found. Please retry download.',
+            errorMessage: 'Extraction finished but no model files found. '
+                'All partial data deleted — tap Retry to start fresh.',
           ),
           force: true,
         );
         return false;
       }
 
-      // 4. Atomically promote extracted files to the live model directory.
+      // 4. Atomically promote to live directory.
       try {
-        if (await destDir.exists()) {
-          await destDir.delete(recursive: true);
-        }
+        if (await destDir.exists()) await destDir.delete(recursive: true);
       } catch (_) {}
       await stagingDir.rename(destDir.path);
 
-      // 3. Clean up temp dir
-      try {
-        await tmpDir.delete(recursive: true);
-      } catch (_) {}
+      // 5. Clean up
+      try { await tmpDir.delete(recursive: true); } catch (_) {}
+      await _purgeBgCache(modelId);
+
+      // Mark ledger done
+      ledger.status = 'done';
+      await _saveLedger(ledger);
 
       _emit(
         modelId,
         DownloadProgress(
           status: DownloadStatus.completed,
-          filesCompleted: _completedZips,
+          filesCompleted: _totalZips,
           totalFiles: _totalZips,
           bytesReceived: _totalModelBytes,
           totalBytes: _totalModelBytes,
@@ -243,11 +305,20 @@ class DownloadManager {
       );
       return true;
     } catch (e) {
+      // Unexpected error — nuke partials so next retry is clean.
+      try {
+        final destDir = await StorageUtils.getModelDirectory(modelId);
+        final tmpDir = await StorageUtils.getDownloadTempDirectory(modelId);
+        final stagingDir = Directory('${destDir.path}__staging');
+        await _nukeAllPartials(modelId, destDir, tmpDir, stagingDir);
+      } catch (_) {}
+      await _clearLedger();
       _emit(
         modelId,
         DownloadProgress(
           status: DownloadStatus.failed,
-          errorMessage: e.toString(),
+          errorMessage: 'Unexpected error: $e\n'
+              'All partial data deleted — tap Retry to start fresh.',
         ),
         force: true,
       );
@@ -255,7 +326,260 @@ class DownloadManager {
     }
   }
 
-  // ── Private helpers ─────────────────────────────────────────────────────
+  // ── Retry wrapper ──────────────────────────────────────────────────────
+
+  /// Tries to download + extract [zipName] up to [_maxRetries] times.
+  /// On each failure the partial zip is deleted so the next attempt starts
+  /// from scratch for that zip. Returns false only if all attempts fail.
+  Future<bool> _downloadAndExtractWithRetries(
+    HFModelDef model,
+    String zipName,
+    String tmpPath,
+    String destPath,
+    _LedgerEntry ledger,
+  ) async {
+    for (int attempt = 1; attempt <= _maxRetries; attempt++) {
+      if (_cancelled) return false;
+
+      if (attempt > 1) {
+        _emit(
+          model.id,
+          DownloadProgress(
+            status: DownloadStatus.downloading,
+            filesCompleted: _completedZips,
+            totalFiles: _totalZips,
+            bytesReceived: _totalDownloaded,
+            totalBytes: _totalModelBytes,
+            retryAttempt: attempt,
+            maxRetries: _maxRetries,
+            overallProgress:
+                (_totalDownloaded / _totalModelBytes).clamp(0.0, 1.0),
+          ),
+          force: true,
+        );
+        // Brief pause before retry to avoid hammering the server.
+        await Future.delayed(Duration(seconds: attempt * 2));
+      }
+
+      final ok = await _downloadAndExtract(
+        model, zipName, tmpPath, destPath, attempt: attempt,
+      );
+      if (ok) return true;
+
+      // Clean up partial zip for this attempt so next attempt is fresh.
+      try {
+        final partial = File('$tmpPath/$zipName');
+        if (await partial.exists()) await partial.delete();
+      } catch (_) {}
+    }
+    return false; // all retries exhausted
+  }
+
+  // ── Core download + extract (single attempt) ───────────────────────────
+
+  Future<bool> _downloadAndExtract(
+    HFModelDef model,
+    String zipName,
+    String tmpPath,
+    String destPath, {
+    int attempt = 1,
+  }) async {
+    final modelId = model.id;
+    final url =
+        'https://huggingface.co/${model.repoId}/resolve/main/$zipName';
+    final zipFilePath = '$tmpPath/$zipName';
+
+    await Directory(tmpPath).create(recursive: true);
+
+    // ── Step A: Background download ─────────────────────────────────────
+    final zipFile = File(zipFilePath);
+    bool alreadyComplete = false;
+    if (await zipFile.exists()) {
+      final expectedBytes = await _remoteContentLength(url);
+      if (expectedBytes > 0 && await zipFile.length() == expectedBytes) {
+        alreadyComplete = true;
+        _totalDownloaded = (_completedZips + 1) * _zipProgressShare();
+      } else {
+        try { await zipFile.delete(); } catch (_) {}
+      }
+    }
+
+    if (!alreadyComplete) {
+      final headers = await _hfHeaders();
+      final appTmp = await getTemporaryDirectory();
+      final bgSubdir = 'fixgemma_dl/$modelId';
+      final taskBaseId =
+          '${modelId}_$zipName'.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final taskId =
+          '${taskBaseId}_a${attempt}_${DateTime.now().millisecondsSinceEpoch}';
+
+      final task = DownloadTask(
+        taskId: taskId,
+        url: url,
+        filename: zipName,
+        headers: headers,
+        directory: bgSubdir,
+        baseDirectory: BaseDirectory.temporary,
+        group: _group,
+        updates: Updates.statusAndProgress,
+        allowPause: true,
+        retries: 0,
+        metaData: jsonEncode({'modelId': modelId, 'zipName': zipName}),
+        displayName: 'Downloading $zipName',
+      );
+
+      final result = await FileDownloader().download(
+        task,
+        onProgress: (progress) {
+          if (_cancelled) return;
+          final zipShare = _zipProgressShare();
+          _totalDownloaded = (_completedZips * zipShare) +
+              (progress * zipShare).round().clamp(0, zipShare);
+          _updateSpeed();
+          final overallProgress =
+              (_totalDownloaded / _totalModelBytes).clamp(0.0, 1.0);
+          final remaining =
+              (_totalModelBytes - _totalDownloaded).clamp(0, _totalModelBytes);
+          final eta = _smoothedSpeedBps > 0
+              ? Duration(seconds: (remaining / _smoothedSpeedBps).round())
+              : null;
+          _emit(
+            modelId,
+            DownloadProgress(
+              status: DownloadStatus.downloading,
+              filesCompleted: _completedZips,
+              totalFiles: _totalZips,
+              bytesReceived: _totalDownloaded,
+              totalBytes: _totalModelBytes,
+              overallProgress: overallProgress,
+              speedBps: _smoothedSpeedBps,
+              eta: eta,
+              retryAttempt: attempt > 1 ? attempt : 0,
+              maxRetries: _maxRetries,
+            ),
+          );
+        },
+        onStatus: (_) {},
+      );
+
+      if (_cancelled) return false;
+
+      if (result.status != TaskStatus.complete) return false;
+
+      // Move downloaded file to our tmp path.
+      final bgFile = File('${appTmp.path}/$bgSubdir/$zipName');
+      if (await bgFile.exists()) {
+        await bgFile.rename(zipFilePath);
+      } else {
+        final taskPath = await task.filePath();
+        if (taskPath != zipFilePath) {
+          final src = File(taskPath);
+          if (await src.exists()) await src.rename(zipFilePath);
+        }
+      }
+    }
+
+    if (_cancelled) return false;
+
+    // ── Step B: Extract ─────────────────────────────────────────────────
+    _emit(
+      modelId,
+      DownloadProgress(
+        status: DownloadStatus.extracting,
+        filesCompleted: _completedZips,
+        totalFiles: _totalZips,
+        bytesReceived: _totalDownloaded,
+        totalBytes: _totalModelBytes,
+        overallProgress:
+            ((_completedZips + 0.5) / _totalZips).clamp(0.0, 1.0),
+        extractProgress: 0.0,
+        retryAttempt: attempt > 1 ? attempt : 0,
+        maxRetries: _maxRetries,
+      ),
+      force: true,
+    );
+
+    final ok = await _extractZip(
+      modelId: modelId,
+      zipPath: zipFilePath,
+      destPath: destPath,
+    );
+    if (!ok) return false;
+
+    // Delete zip after successful extraction to free space.
+    try { await File(zipFilePath).delete(); } catch (_) {}
+    return true;
+  }
+
+  // ── Speed tracking ─────────────────────────────────────────────────────
+
+  void _updateSpeed() {
+    final now = DateTime.now();
+    if (_lastSample != null) {
+      final elapsed = now.difference(_lastSample!).inMilliseconds / 1000.0;
+      if (elapsed >= 0.5) {
+        final delta = _totalDownloaded - _lastSampleBytes;
+        final instant = delta / elapsed;
+        _smoothedSpeedBps = _smoothedSpeedBps == 0
+            ? instant
+            : 0.2 * instant + 0.8 * _smoothedSpeedBps;
+        _lastSample = now;
+        _lastSampleBytes = _totalDownloaded;
+      }
+    } else {
+      _lastSample = now;
+      _lastSampleBytes = _totalDownloaded;
+    }
+  }
+
+  // ── Ledger persistence ─────────────────────────────────────────────────
+
+  Future<void> _saveLedger(_LedgerEntry entry) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ledgerKey, jsonEncode(entry.toJson()));
+  }
+
+  Future<_LedgerEntry?> _loadLedger() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_ledgerKey);
+    if (raw == null) return null;
+    try {
+      return _LedgerEntry.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _clearLedger() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_ledgerKey);
+  }
+
+  // ── Cleanup helpers ────────────────────────────────────────────────────
+
+  Future<void> _nukeAllPartials(
+    String modelId,
+    Directory destDir,
+    Directory tmpDir,
+    Directory stagingDir,
+  ) async {
+    for (final dir in [destDir, tmpDir, stagingDir]) {
+      if (await dir.exists()) {
+        try { await dir.delete(recursive: true); } catch (_) {}
+      }
+    }
+    await _purgeBgCache(modelId);
+  }
+
+  Future<void> _purgeBgCache(String modelId) async {
+    try {
+      final appTmp = await getTemporaryDirectory();
+      final bgCache = Directory('${appTmp.path}/fixgemma_dl/$modelId');
+      if (await bgCache.exists()) await bgCache.delete(recursive: true);
+    } catch (_) {}
+  }
+
+  // ── HF helpers ─────────────────────────────────────────────────────────
 
   static const _noManifest = _ZipManifest(files: [], totalBytes: 0);
 
@@ -320,203 +644,6 @@ class DownloadManager {
 
   int _zipProgressShare() => _totalModelBytes ~/ _totalZips.clamp(1, 9999);
 
-  /// Download a single zip using [FileDownloader] (background-safe), then
-  /// extract it in-place via an Isolate.
-  Future<bool> _downloadAndExtract(
-      HFModelDef model, String zipName, String tmpPath, String destPath,
-      {int attempt = 1}) async {
-    final modelId = model.id;
-    final url = 'https://huggingface.co/${model.repoId}/resolve/main/$zipName';
-    final zipFilePath = '$tmpPath/$zipName';
-
-    // Ensure tmp dir exists
-    await Directory(tmpPath).create(recursive: true);
-
-    // ── Step A: Background download ─────────────────────────────────────
-    // Check if the zip is already fully downloaded from a previous attempt.
-    final zipFile = File(zipFilePath);
-    bool alreadyComplete = false;
-    if (await zipFile.exists()) {
-      // Trust a complete file only if its size matches the remote header.
-      final expectedBytes = await _remoteContentLength(url);
-      if (expectedBytes > 0 && await zipFile.length() == expectedBytes) {
-        alreadyComplete = true;
-        _totalDownloaded = (_completedZips + 1) * _zipProgressShare();
-      } else {
-        // Partial/corrupt — delete and re-download.
-        try {
-          await zipFile.delete();
-        } catch (_) {}
-      }
-    }
-
-    if (!alreadyComplete) {
-      final headers = await _hfHeaders();
-
-      // background_downloader requires a stable base directory. We target
-      // BaseDirectory.temporary (= cacheDir on Android / tmp on iOS) and
-      // use a subdirectory for the model's temp files.
-      //
-      // We then move the file to our custom tmpPath after completion.
-      final appTmp = await getTemporaryDirectory();
-      final bgSubdir = 'fixgemma_dl/$modelId';
-      final taskId =
-          '${modelId}_$zipName'.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-
-      // Remove any stale task record with the same ID.
-      await FileDownloader().cancelTasksWithIds([taskId]);
-
-      final task = DownloadTask(
-        taskId: taskId,
-        url: url,
-        filename: zipName,
-        headers: headers,
-        directory: bgSubdir,
-        baseDirectory: BaseDirectory.temporary,
-        group: _group,
-        updates: Updates.statusAndProgress,
-        allowPause:
-            true, // Auto-pause/resume when the 9-min Android limit is hit
-        retries: 3, // Retry up to 3× on failure
-        metaData: jsonEncode({'modelId': modelId, 'zipName': zipName}),
-        displayName: 'Downloading $zipName',
-      );
-
-      final completer = Completer<bool>();
-
-      final result = await FileDownloader().download(
-        task,
-        onProgress: (progress) {
-          if (_cancelled) return;
-
-          final zipShare = _zipProgressShare();
-          _totalDownloaded = (_completedZips * zipShare) +
-              (progress * zipShare).round().clamp(0, zipShare);
-
-          final now = DateTime.now();
-          if (_lastSample != null) {
-            final elapsed =
-                now.difference(_lastSample!).inMilliseconds / 1000.0;
-            if (elapsed >= 0.5) {
-              final delta = _totalDownloaded - _lastSampleBytes;
-              final instant = delta / elapsed;
-              _smoothedSpeedBps = _smoothedSpeedBps == 0
-                  ? instant
-                  : 0.2 * instant + 0.8 * _smoothedSpeedBps;
-              _lastSample = now;
-              _lastSampleBytes = _totalDownloaded;
-            }
-          } else {
-            _lastSample = now;
-            _lastSampleBytes = _totalDownloaded;
-          }
-
-          final overallProgress =
-              (_totalDownloaded / _totalModelBytes).clamp(0.0, 1.0);
-          final remaining =
-              (_totalModelBytes - _totalDownloaded).clamp(0, _totalModelBytes);
-          final eta = _smoothedSpeedBps > 0
-              ? Duration(seconds: (remaining / _smoothedSpeedBps).round())
-              : null;
-
-          _emit(
-            modelId,
-            DownloadProgress(
-              status: DownloadStatus.downloading,
-              filesCompleted: _completedZips,
-              totalFiles: _totalZips,
-              bytesReceived: _totalDownloaded,
-              totalBytes: _totalModelBytes,
-              overallProgress: overallProgress,
-              speedBps: _smoothedSpeedBps,
-              eta: eta,
-            ),
-          );
-        },
-        onStatus: (status) {
-          if (status == TaskStatus.canceled && !completer.isCompleted) {
-            completer.complete(false);
-          }
-        },
-      );
-
-      if (_cancelled) return false;
-
-      if (result.status != TaskStatus.complete) {
-        _emit(
-          modelId,
-          DownloadProgress(
-            status: DownloadStatus.failed,
-            errorMessage:
-                'Download failed: ${result.status} — ${result.exception?.description ?? 'unknown error'}',
-          ),
-          force: true,
-        );
-        return false;
-      }
-
-      // Move the downloaded file from background_downloader's temp dir to our
-      // custom tmpPath so the extraction step can find it.
-      final bgFile = File('${appTmp.path}/$bgSubdir/$zipName');
-      if (await bgFile.exists()) {
-        await bgFile.rename(zipFilePath);
-      } else {
-        // background_downloader may have already placed it at the task path.
-        final taskPath = await task.filePath();
-        if (taskPath != zipFilePath) {
-          final src = File(taskPath);
-          if (await src.exists()) await src.rename(zipFilePath);
-        }
-      }
-    }
-
-    if (_cancelled) return false;
-
-    // ── Step B: Extract ─────────────────────────────────────────────────
-    _emit(
-      modelId,
-      DownloadProgress(
-        status: DownloadStatus.extracting,
-        filesCompleted: _completedZips,
-        totalFiles: _totalZips,
-        bytesReceived: _totalDownloaded,
-        totalBytes: _totalModelBytes,
-        overallProgress: ((_completedZips + 0.5) / _totalZips).clamp(0.0, 1.0),
-        extractProgress: 0.0,
-      ),
-      force: true,
-    );
-
-    final ok = await _extractZip(
-      modelId: modelId,
-      zipPath: zipFilePath,
-      destPath: destPath,
-    );
-    if (!ok) {
-      if (attempt < 2 && !_cancelled) {
-        try {
-          final file = File(zipFilePath);
-          if (await file.exists()) await file.delete();
-        } catch (_) {}
-        return _downloadAndExtract(
-          model,
-          zipName,
-          tmpPath,
-          destPath,
-          attempt: attempt + 1,
-        );
-      }
-      return false;
-    }
-
-    // Delete zip after extraction to free space.
-    try {
-      await File(zipFilePath).delete();
-    } catch (_) {}
-
-    return true;
-  }
-
   Future<int> _remoteContentLength(String url) async {
     try {
       final response = await _dio.head(
@@ -536,8 +663,8 @@ class DownloadManager {
     }
   }
 
-  /// Extract a zip file in a background Isolate so the main thread stays
-  /// responsive. Progress (0.0–1.0) is sent back through a ReceivePort.
+  // ── Extraction via Isolate ─────────────────────────────────────────────
+
   Future<bool> _extractZip({
     required String modelId,
     required String zipPath,
@@ -654,7 +781,9 @@ class DownloadManager {
     final driveIndex = name.indexOf(':/');
     if (driveIndex >= 0) name = name.substring(driveIndex + 2);
 
-    while (name.startsWith('/')) name = name.substring(1);
+    while (name.startsWith('/')) {
+      name = name.substring(1);
+    }
 
     final parts = name
         .split('/')
@@ -664,6 +793,8 @@ class DownloadManager {
     if (parts.isEmpty || parts.any((part) => part == '..')) return null;
     return '$destPath/${parts.join('/')}';
   }
+
+  // ── Emit helpers ───────────────────────────────────────────────────────
 
   void _emit(String modelId, DownloadProgress p, {bool force = false}) {
     final now = DateTime.now();
@@ -677,7 +808,9 @@ class DownloadManager {
   }
 
   void dispose() {
-    for (final c in _progressControllers.values) c.close();
+    for (final c in _progressControllers.values) {
+      c.close();
+    }
     _progressControllers.clear();
   }
 }

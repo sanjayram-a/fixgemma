@@ -12,6 +12,10 @@ class DownloadProgress {
   final double speedBps;
   final Duration? eta;
   final String? errorMessage;
+  /// Current retry attempt (1-based). 0 means first try (no retry yet).
+  final int retryAttempt;
+  /// Maximum retries allowed before giving up.
+  final int maxRetries;
 
   const DownloadProgress({
     this.status = DownloadStatus.idle,
@@ -24,6 +28,8 @@ class DownloadProgress {
     this.speedBps = 0,
     this.eta,
     this.errorMessage,
+    this.retryAttempt = 0,
+    this.maxRetries = 3,
   });
 
   /// Byte-based progress if available, else file-count based.
@@ -35,6 +41,7 @@ class DownloadProgress {
   bool get isPaused  => status == DownloadStatus.paused;
   bool get isDone    => status == DownloadStatus.completed;
   bool get hasFailed => status == DownloadStatus.failed;
+  bool get isRetrying => retryAttempt > 0 && status == DownloadStatus.downloading;
 
   DownloadProgress copyWith({
     DownloadStatus? status,
@@ -47,6 +54,8 @@ class DownloadProgress {
     double? speedBps,
     Duration? eta,
     String? errorMessage,
+    int? retryAttempt,
+    int? maxRetries,
   }) =>
       DownloadProgress(
         status: status ?? this.status,
@@ -59,5 +68,7 @@ class DownloadProgress {
         speedBps: speedBps ?? this.speedBps,
         eta: eta ?? this.eta,
         errorMessage: errorMessage ?? this.errorMessage,
+        retryAttempt: retryAttempt ?? this.retryAttempt,
+        maxRetries: maxRetries ?? this.maxRetries,
       );
 }

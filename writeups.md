@@ -1,13 +1,12 @@
 ## **Inspiration**
 
-The world generates about 170,000 tonnes of e-waste per day. Most of it is thrown away because it is hard to repair by ourselves or expensive to hire professionals.
+The world generated **62 million tonnes** of e-waste in 2022, and it's projected to reach **82 million tonnes** by 2030. A large portion of this waste comes from household appliances that could be repaired, but are discarded because fixing them is difficult or costly.
 
 AI is helping to solve most of the problems today, but flagship models come with limitations. Most of them look like regular chatbots and require internet. In rural areas, reliable internet connections are often not available.
 
 We strongly believe in the **Right to Repair**. Everyone needs a solution that works regardless of internet access and even on budget mobiles.
 
 I love doing DIY repairs and projects myself, but I always felt something was missing — a reliable companion to guide me through the process. So I built **FixGemma - AI Repair Assistant**.
-
 There are many AI apps that fail because they prioritize conversational UI over efficient, task-oriented experience. So I built the app with a new Carousel UI to make a difference.
 
 ## **FixGemma**
@@ -92,5 +91,9 @@ While building the app, I noticed that Cactus does not provide simple cloud usag
 - I learned how challenging it is to optimize and deploy large models on real low-end budget smartphones while maintaining good speed and user experience.
 - I understood the importance of good UI/UX design — especially how a well-designed Carousel interface can make even slower inference feel smooth and user-friendly.
 
+## **Conclusion**
+FixGemma started with a strong belief in the **Right to Repair** and a goal to help people fix things completely offline. By fine-tuning **Gemma 4** models with Unsloth and converting them to Cactus format, we successfully ran a gigabyte-sized model on an $80 budget phone. 
+
+Introduced the new Carousel UI instead of a basic chat to make the step-by-step instructions smooth and task-oriented. This project showed us how challenging but possible it is to optimize large models for real low-end devices. Ultimately, FixGemma proves that helpful AI doesn't need the internet and can work for everyone, even in rural areas.
 
 <p>Brought to life with the invaluable support of <a href="https://www.kaggle.com/renuka7812">@Renuka S.</a> </p>
